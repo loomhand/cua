@@ -2946,7 +2946,7 @@ fn restore_focus_state(display: *mut x11::xlib::Display, saved: &SavedFocus) {
         let own_dialog = |now: Option<x11::xlib::Window>| {
             now.is_some_and(|now| now != prev && is_own_dialog(prev, now))
         };
-        if own_dialog(ewmh_active_window(display)) {
+        if own_dialog(ewmh_active_window(display)) || !window_exists(display, prev) {
             return;
         }
         sleep(Duration::from_millis(300));
@@ -2958,7 +2958,7 @@ fn restore_focus_state(display: *mut x11::xlib::Display, saved: &SavedFocus) {
                 if stable >= 3 {
                     return;
                 }
-            } else if own_dialog(now) {
+            } else if own_dialog(now) || !window_exists(display, prev) {
                 return;
             } else {
                 stable = 0;
@@ -3018,6 +3018,19 @@ fn restore_focus_state(display: *mut x11::xlib::Display, saved: &SavedFocus) {
         );
         x11::xlib::XSync(display, 0);
         x11::xlib::XSetErrorHandler(prev_handler);
+    }
+}
+
+/// Whether `window` still exists. When the click closed the saved window there
+/// is nothing to restore, and bouncing focus onto the WM's fallback window
+/// keeps xfwm4 from focusing the next window it maps.
+fn window_exists(display: *mut x11::xlib::Display, window: x11::xlib::Window) -> bool {
+    unsafe {
+        let prev_handler = x11::xlib::XSetErrorHandler(Some(ignore_x_error));
+        let mut attributes: x11::xlib::XWindowAttributes = std::mem::zeroed();
+        let exists = x11::xlib::XGetWindowAttributes(display, window, &mut attributes) != 0;
+        x11::xlib::XSetErrorHandler(prev_handler);
+        exists
     }
 }
 
