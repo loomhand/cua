@@ -413,15 +413,19 @@ fn text_types_more_distinct_unmapped_characters_than_spare_keycodes() -> Result<
     let (conn, screen) = connect()?;
     let window = focused_input_window(&conn, screen)?;
     let spare = spare_keycodes(&conn)?;
-    let (&free, taken) = spare
-        .split_last()
+    // keycode 248 is the MPX warm-up keycode, which a text never borrows
+    let free = *spare
+        .iter()
+        .rev()
+        .find(|&&keycode| keycode != 248)
         .expect("the test display has no spare keycode");
+    let taken: Vec<u8> = spare.iter().copied().filter(|&k| k != free).collect();
     let per = conn
         .get_keyboard_mapping(free, 1)?
         .reply()?
         .keysyms_per_keycode;
     let bind = |keysym: u32| -> Result<()> {
-        for &keycode in taken {
+        for &keycode in &taken {
             conn.change_keyboard_mapping(1, keycode, per, &vec![keysym; usize::from(per)])?;
         }
         conn.get_input_focus()?.reply()?;
@@ -684,15 +688,19 @@ fn xtest_text_rebinds_a_spare_keycode_only_after_the_client_confirms() -> Result
     let (conn, screen) = connect()?;
     let (root, protocols, ping) = ping_window(&conn, screen)?;
     let spare = spare_keycodes(&conn)?;
-    let (&free, others) = spare
-        .split_last()
+    // keycode 248 is the MPX warm-up keycode, which a text never borrows
+    let free = *spare
+        .iter()
+        .rev()
+        .find(|&&keycode| keycode != 248)
         .expect("the test display has no spare keycode");
+    let others: Vec<u8> = spare.iter().copied().filter(|&k| k != free).collect();
     let per = conn
         .get_keyboard_mapping(free, 1)?
         .reply()?
         .keysyms_per_keycode;
     let bind = |keysym: u32| -> Result<()> {
-        for &keycode in others {
+        for &keycode in &others {
             conn.change_keyboard_mapping(1, keycode, per, &vec![keysym; usize::from(per)])?;
         }
         conn.get_input_focus()?.reply()?;

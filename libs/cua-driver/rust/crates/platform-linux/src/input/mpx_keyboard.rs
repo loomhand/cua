@@ -344,6 +344,10 @@ fn ensure_master_keyboard(
 /// it types nothing anywhere.
 const WARM_UP_EVDEV_CODE: u16 = 240;
 
+/// The X keycode of [`WARM_UP_EVDEV_CODE`], which a spare keycode never borrows:
+/// the warm-up of a new virtual keyboard taps it after the text's remap.
+pub(super) const WARM_UP_KEYCODE: u8 = WARM_UP_EVDEV_CODE as u8 + 8;
+
 /// The first key events of a freshly hot-plugged keyboard were observed to
 /// vanish (the master switches to the slave's keymap on its first event and
 /// clients only learn about the new master from the hierarchy event queued
