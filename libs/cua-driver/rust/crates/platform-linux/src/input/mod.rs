@@ -4192,6 +4192,24 @@ mod spare_keycode_tests {
     use x11rb::protocol::xproto::GetKeyboardMappingReply;
 
     #[test]
+    fn spare_keycodes_skip_bound_and_held_keycodes() {
+        let per = 2usize;
+        let mut keysyms = vec![0u32; 4 * per];
+        keysyms[per..2 * per].copy_from_slice(&[0x61, 0x41]);
+        let mut mapping = GetKeyboardMappingReply {
+            keysyms_per_keycode: per as u8,
+            sequence: 0,
+            keysyms,
+        };
+        assert_eq!(reserve(&mut mapping).unwrap(), 11);
+        assert_eq!(reserve(&mut mapping).unwrap(), 10);
+        assert_eq!(
+            reserve(&mut mapping).unwrap_err().to_string(),
+            "no spare keycode available to remap keysym 0x10062D0"
+        );
+    }
+
+    #[test]
     fn spare_keycodes_skip_the_mpx_warm_up_keycode() {
         let per = 2usize;
         let mut mapping = GetKeyboardMappingReply {
@@ -4215,6 +4233,22 @@ mod spare_keycode_tests {
         assert_eq!(
             batch_keycodes(&mapping, "\u{4f60}\u{597d}").unwrap(),
             [247, 247]
+        );
+    }
+
+    #[test]
+    fn text_batches_do_not_count_keycode_8_as_spare() {
+        let per = 2usize;
+        let mut keysyms = vec![0x61u32; 4 * per];
+        keysyms[..2 * per].fill(0);
+        let mapping = GetKeyboardMappingReply {
+            keysyms_per_keycode: per as u8,
+            sequence: 0,
+            keysyms,
+        };
+        assert_eq!(
+            batch_keycodes(&mapping, "\u{4f60}\u{597d}").unwrap(),
+            [9, 9]
         );
     }
 
@@ -4485,10 +4519,11 @@ fn reserve_spare_keycode<G>(
 }
 
 /// Whether a text may borrow `keycode`: every keysym slot is NoSymbol (0) — i.e.
-/// completely unused — so borrowing it cannot clobber a real key. The MPX
-/// warm-up keycode is never borrowed.
+/// completely unused — so borrowing it cannot clobber a real key. Keycode 8
+/// (evdev KEY_RESERVED, which a virtual keyboard cannot send) and the MPX
+/// warm-up keycode are never borrowed.
 fn is_spare_keycode(keycode: u8, keysyms: &[u32]) -> bool {
-    keycode != mpx_keyboard::WARM_UP_KEYCODE && keysyms.iter().all(|&s| s == 0)
+    keycode > 8 && keycode != mpx_keyboard::WARM_UP_KEYCODE && keysyms.iter().all(|&s| s == 0)
 }
 
 /// Resolve `keysym` to a keycode usable in a synthetic key event. First scans

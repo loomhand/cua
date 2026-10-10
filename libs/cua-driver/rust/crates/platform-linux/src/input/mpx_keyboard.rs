@@ -825,12 +825,13 @@ mod tests {
 
     #[test]
     fn text_plan_fails_without_steps_and_restores_remaps_when_spares_run_out() {
+        // keycodes 8 and 9 stay free; 8 is never borrowed, so 9 is the one spare
         let mut keymap = mapping();
         keymap
             .keysyms
             .iter_mut()
             .filter(|sym| **sym == 0)
-            .skip(2)
+            .skip(4)
             .for_each(|sym| *sym = 1);
         let restored = std::cell::Cell::new(0);
         let error = plan_text_with_fallback(&keymap, Some(50), "aé€a", |ch, mapping| {
