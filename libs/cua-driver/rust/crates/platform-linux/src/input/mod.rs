@@ -3441,7 +3441,8 @@ fn type_text_in_spare_batches<G>(
         per => mapping
             .keysyms
             .chunks(per)
-            .filter(|syms| syms.iter().all(|&s| s == 0))
+            .enumerate()
+            .filter(|&(i, syms)| is_spare_keycode((8 + i) as u8, syms))
             .count(),
     };
     let mut rest = text.chars().peekable();
@@ -4186,6 +4187,66 @@ pub(crate) fn key_name_to_keysym(key: &str) -> Result<u32> {
 }
 
 #[cfg(test)]
+mod spare_keycode_tests {
+    use super::{reserve_spare_keycode, type_text_in_spare_batches};
+    use x11rb::protocol::xproto::GetKeyboardMappingReply;
+
+    #[test]
+    fn spare_keycodes_skip_the_mpx_warm_up_keycode() {
+        let per = 2usize;
+        let mut mapping = GetKeyboardMappingReply {
+            keysyms_per_keycode: per as u8,
+            sequence: 0,
+            keysyms: vec![0u32; (248 - 8 + 1) * per],
+        };
+        assert_eq!(reserve(&mut mapping).unwrap(), 247);
+    }
+
+    #[test]
+    fn text_batches_do_not_count_the_mpx_warm_up_keycode_as_spare() {
+        let per = 2usize;
+        let mut keysyms = vec![0x61u32; (248 - 8 + 1) * per];
+        keysyms[(247 - 8) * per..].fill(0);
+        let mapping = GetKeyboardMappingReply {
+            keysyms_per_keycode: per as u8,
+            sequence: 0,
+            keysyms,
+        };
+        assert_eq!(
+            batch_keycodes(&mapping, "\u{4f60}\u{597d}").unwrap(),
+            [247, 247]
+        );
+    }
+
+    fn batch_keycodes(mapping: &GetKeyboardMappingReply, text: &str) -> anyhow::Result<Vec<u8>> {
+        let mut sent = Vec::new();
+        type_text_in_spare_batches(
+            text,
+            mapping,
+            |ch, mapping| {
+                reserve_spare_keycode(
+                    mapping,
+                    super::mpx_keyboard::keysym_for_char(ch),
+                    |_, _, _, _| Ok(()),
+                )
+                .map(|(keycode, guard)| (keycode, Some(guard)))
+            },
+            |keycode, _| {
+                sent.push(keycode);
+                Ok(())
+            },
+            || true,
+        )?;
+        Ok(sent)
+    }
+
+    fn reserve(mapping: &mut GetKeyboardMappingReply) -> anyhow::Result<u8> {
+        reserve_spare_keycode(mapping, 0x0100_62d0, |_, _, _, _| Ok(()))
+            .map(|(keycode, ())| keycode)
+    }
+}
+
+#[cfg(test)]
 mod key_name_alias_tests {
     use super::{
         char_to_keycode_shift, key_name_to_keysym, reserve_spare_keycode,
@@ -4400,16 +4461,16 @@ fn reserve_spare_keycode<G>(
         bail!("empty keyboard mapping; cannot remap keysym 0x{keysym:X}");
     }
 
-    // Find a keycode whose every keysym slot is NoSymbol (0) — i.e. completely
-    // unused — so borrowing it cannot clobber a real key. Scan high-to-low:
-    // high keycodes are far likelier to be free than the low, populated ones.
+    // Scan high-to-low: high keycodes are far likelier to be free than the low,
+    // populated ones.
     let spare = mapping
         .keysyms
         .chunks(per)
         .enumerate()
         .rev()
-        .find(|(_, syms)| syms.iter().all(|&s| s == 0))
-        .map(|(i, _)| (8 + i) as u8)
+        .map(|(i, syms)| ((8 + i) as u8, syms))
+        .find(|&(keycode, syms)| is_spare_keycode(keycode, syms))
+        .map(|(keycode, _)| keycode)
         .ok_or_else(|| anyhow!("no spare keycode available to remap keysym 0x{keysym:X}"))?;
 
     // Snapshot the original keysyms (all NoSymbol, but capture them so restore is
@@ -4421,6 +4482,13 @@ fn reserve_spare_keycode<G>(
     let guard = bind(spare, per as u8, &original_keysyms, &new_keysyms)?;
     mapping.keysyms[idx..idx + per].copy_from_slice(&new_keysyms);
     Ok((spare, guard))
+}
+
+/// Whether a text may borrow `keycode`: every keysym slot is NoSymbol (0) — i.e.
+/// completely unused — so borrowing it cannot clobber a real key. The MPX
+/// warm-up keycode is never borrowed.
+fn is_spare_keycode(keycode: u8, keysyms: &[u32]) -> bool {
+    keycode != mpx_keyboard::WARM_UP_KEYCODE && keysyms.iter().all(|&s| s == 0)
 }
 
 /// Resolve `keysym` to a keycode usable in a synthetic key event. First scans
