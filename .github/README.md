@@ -34,6 +34,7 @@ Upstream already: keep the Chromium screen rebase off a top-level frame that mat
 - A rebase conflict leaves `dev` as it was and opens an issue with the conflicting files; resolve it by hand on `dev`.
 - Upstream's own workflows stay disabled in this fork; only the `Fork:` workflows run.
 - `fix/*` and `cmgs/*` branches are never touched by automation.
+- The sync pushes with the `UPSTREAM_SYNC_TOKEN` secret, a fine-grained token of a repository admin with Contents and Workflows write: GitHub refuses workflow-file changes, which upstream makes often, from the default token, and only admins may rebase `dev`.
 
 ## Builds
 
