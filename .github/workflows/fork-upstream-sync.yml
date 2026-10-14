@@ -24,14 +24,35 @@ jobs:
   sync:
     runs-on: ubuntu-24.04
     steps:
+      # the default token may not push upstream's workflow changes, so without a usable admin token the sync is skipped, not failed
+      - name: Sync token
+        id: token
+        env:
+          TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+        run: |
+          ready=false
+          if [ -z "$TOKEN" ]; then
+            reason="UPSTREAM_SYNC_TOKEN not set"
+          elif [ "$(GH_TOKEN="$TOKEN" gh api "repos/$GITHUB_REPOSITORY" --jq .permissions.admin 2>/dev/null)" = true ]; then
+            ready=true
+          else
+            reason="UPSTREAM_SYNC_TOKEN cannot administer $GITHUB_REPOSITORY"
+          fi
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+          if [ "$ready" != true ]; then
+            echo "sync skipped: $reason" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Checkout dev
+        if: steps.token.outputs.ready == 'true'
         uses: actions/checkout@v7.0.1
         with:
           ref: dev
           fetch-depth: 0
-          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
 
       - name: Fast-forward main to upstream
+        if: steps.token.outputs.ready == 'true'
         run: |
           set -eu
           git fetch --quiet "$UPSTREAM" main
@@ -40,6 +61,7 @@ jobs:
           echo "UPSTREAM_SHA=$upstream" >> "$GITHUB_ENV"
 
       - name: Rebase dev onto main
+        if: steps.token.outputs.ready == 'true'
         id: rebase
         run: |
           set -eu
@@ -88,7 +110,7 @@ jobs:
             done
 
       - name: Build the new dev
-        if: success()
+        if: success() && steps.token.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
