@@ -1,0 +1,40 @@
+# loomhand fork: the patched dev line builds and passes the Linux driver checks headless.
+name: "Fork: CI"
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CUA_TELEMETRY: "0"
+  DO_NOT_TRACK: "1"
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq pkg-config libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev libxkbcommon-dev libdbus-1-dev
+
+      - name: Format
+        working-directory: libs/cua-driver/rust
+        run: cargo fmt --all --check
+
+      - name: Build cua-driver
+        working-directory: libs/cua-driver/rust
+        run: cargo build --locked -p cua-driver --features cua-driver/portal-input
+
+      - name: Linux platform unit tests
+        working-directory: libs/cua-driver/rust
+        run: cargo test --locked -p platform-linux --lib
