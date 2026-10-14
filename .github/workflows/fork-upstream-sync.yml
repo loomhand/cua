@@ -82,7 +82,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          gh workflow list --repo "$GITHUB_REPOSITORY" --all --json id,path,state --jq '.[] | select(.state == "active") | "\(.id) \(.path)"' |
+          gh workflow list --repo "$GITHUB_REPOSITORY" --all --limit 1000 --json id,path,state --jq '.[] | select(.state == "active") | "\(.id) \(.path)"' |
             while read -r id path; do
               case " $FORK_WORKFLOWS " in *" ${path##*/} "*) ;; *) gh workflow disable "$id" --repo "$GITHUB_REPOSITORY" ;; esac
             done
