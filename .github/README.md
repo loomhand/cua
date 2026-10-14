@@ -25,17 +25,18 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11 fix
 | stop the focus restore when the saved window is gone | fork only |
 | rebase Chromium screen extents only from a frame the size of the target window | fork only |
 
-Before a box image moves its cua-driver pin from `cmgs/backup-20261013/x11-typing` to `dev`, which fails a text that needs more spare keycodes than are free with nothing typed instead of rebinding the oldest one:
+Before a box image moves its cua-driver pin from `cmgs/backup-20261013/x11-typing` to `dev`:
 
 - a desktop box has 19 free keycodes, and `dev` can use 17 of them, since it holds back 8 and 248;
-- a single `type_text` call with more than 17 distinct characters missing from the keymap fails on `dev` (32, 64 and 120 distinct CJK characters: 0 of 3 each), where the current pin typed 18 of 18 exactly;
-- calls of at most 8 distinct characters each typed 18 of 18 exactly on `dev`;
-- so the pin moves only together with a client that splits every text into runs of at most 8 distinct characters on every typing route.
+- the window routes (XSendEvent and XTest to the focused window) type a text with more distinct missing characters than free spare keycodes in batches, upstream since [#5168](https://github.com/trycua/cua/pull/5168);
+- the virtual-keyboard route and targeted XTest still fail such a text before typing anything; measured before #5168, a single call with 32, 64 or 120 distinct CJK characters typed 0 of 3, and calls of at most 8 distinct characters typed 18 of 18;
+- so the pin moves once the client's typing goes through the window routes, or keeps runs of at most 8 distinct characters on the other routes.
 
 Upstream already:
 
+- type a long text in spare-keycode batches ([#5168](https://github.com/trycua/cua/pull/5168));
 - keep the Chromium screen rebase off a top-level frame that matches its window-manager frame ([#4967](https://github.com/trycua/cua/pull/4967), merged as `6e050d720`);
-- fail `type_text` before typing anything when a character cannot be typed, with one spare keycode per distinct character ([#5139](https://github.com/trycua/cua/pull/5139), salvaged from [#4922](https://github.com/trycua/cua/pull/4922); it also covers [#4923](https://github.com/trycua/cua/pull/4923)).
+- fail `type_text` before typing anything when a character cannot be typed, with one spare keycode per distinct character ([#5139](https://github.com/trycua/cua/pull/5139), salvaged from [#4922](https://github.com/trycua/cua/pull/4922)), and give each character of a text its own spare keycode ([#5158](https://github.com/trycua/cua/pull/5158), the change [#4923](https://github.com/trycua/cua/pull/4923) proposed).
 
 ## Sync policy
 
