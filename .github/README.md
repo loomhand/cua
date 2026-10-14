@@ -21,10 +21,16 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11 fix
 | never borrow keycode 8, which a virtual keyboard cannot send | fork only |
 | leave focus on a dialog the clicked app opened | [#4965](https://github.com/trycua/cua/pull/4965) |
 | keep an ended session's master pointer until the menu its click opened closes | [#4966](https://github.com/trycua/cua/pull/4966) |
+| sync a borrowed keycode with each window its keys went to | [#4924](https://github.com/trycua/cua/pull/4924) |
 | stop the focus restore when the saved window is gone | fork only |
 | rebase Chromium screen extents only from a frame the size of the target window | fork only |
 
-Precondition before a box image moves its cua-driver pin from `cmgs/backup-20261013/x11-typing` to `dev`: on `dev`, as upstream, a text that needs more spare keycodes than the keymap has free fails before typing anything, where the older line rebound the oldest spare keycode and went on. Measure a box's free spare keycodes and check that the toolhost's typing runs of 8 characters always fit, CJK text included.
+Before a box image moves its cua-driver pin from `cmgs/backup-20261013/x11-typing` to `dev`, which fails a text that needs more spare keycodes than are free with nothing typed instead of rebinding the oldest one:
+
+- a desktop box has 19 free keycodes, and `dev` can use 17 of them, since it holds back 8 and 248;
+- a single `type_text` call with more than 17 distinct characters missing from the keymap fails on `dev` (32, 64 and 120 distinct CJK characters: 0 of 3 each), where the current pin typed 18 of 18 exactly;
+- calls of at most 8 distinct characters each typed 18 of 18 exactly on `dev`;
+- so the pin moves only together with a client that splits every text into runs of at most 8 distinct characters on every typing route.
 
 Upstream already:
 
