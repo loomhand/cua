@@ -8,7 +8,7 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11 fix
 |---|---|
 | `main` | trycua/cua `main`, fast-forward only, never changed here |
 | `dev` (default) | `main` plus the patches below and the fork workflows |
-| `fix/*` | head branches of the open upstream pull requests; never rebased by automation |
+| `fix/*` | head branches of the open upstream pull requests |
 | `cmgs/x11-typing`, `cmgs/backup-20261013/x11-typing` | the earlier patched line; released desktop images pin commits on them, so they stay |
 
 ## Patches on dev
@@ -24,6 +24,8 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11 fix
 | stop the focus restore when the saved window is gone | fork only |
 | rebase Chromium screen extents only from a frame the size of the target window | fork only |
 
+Precondition before a box image moves its cua-driver pin from `cmgs/backup-20261013/x11-typing` to `dev`: on `dev`, as upstream, a text that needs more spare keycodes than the keymap has free fails before typing anything, where the older line rebound the oldest spare keycode and went on. Measure a box's free spare keycodes and check that the toolhost's typing runs of 8 characters always fit, CJK text included.
+
 Upstream already:
 
 - keep the Chromium screen rebase off a top-level frame that matches its window-manager frame ([#4967](https://github.com/trycua/cua/pull/4967), merged as `6e050d720`);
@@ -31,11 +33,18 @@ Upstream already:
 
 ## Sync policy
 
-- `Fork: Upstream sync` runs daily: it fast-forwards `main` to trycua/cua `main` and rebases `dev` onto it. A patch that upstream merged drops out of the rebase.
-- A rebase conflict leaves `dev` as it was and opens an issue with the conflicting files; resolve it by hand on `dev`.
-- Upstream's own workflows stay disabled in this fork; only the `Fork:` workflows run.
-- `fix/*` and `cmgs/*` branches are never touched by automation.
-- The sync pushes with the `UPSTREAM_SYNC_TOKEN` secret, a fine-grained token of a repository admin with Contents and Workflows write: GitHub refuses workflow-file changes, which upstream makes often, from the default token, and only admins may rebase `dev`.
+`main` follows trycua/cua `main` and `dev` is rebased onto it by hand, by a repository admin:
+
+```bash
+git fetch upstream main
+git push origin upstream/main:refs/heads/main                # fast-forward only
+git switch dev && git rebase upstream/main                   # a patch upstream merged drops out; resolve conflicts here
+git push --force-with-lease=dev:origin/dev origin dev
+gh workflow list -R loomhand/cua --all -L 1000 --json id,path,state --jq '.[] | select(.state == "active") | select(.path | test("/fork-") | not) | .id' | xargs -n1 gh workflow disable -R loomhand/cua
+```
+
+- Upstream's own workflows stay disabled in this fork; only the `Fork:` workflows run. A sync can bring new upstream workflows, which start active, so the last line runs after every push to `main`.
+- `fix/*` and `cmgs/*` branches are never rebased by a sync.
 
 ## Builds
 
