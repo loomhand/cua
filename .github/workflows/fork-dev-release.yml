@@ -1,0 +1,129 @@
+# loomhand fork: each push to dev publishes the "Dev Build" pre-release at tag dev, as cocoonstack/cloud-hypervisor does.
+name: "Fork: Build and Release Dev"
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dev-release
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    # Debian 11 keeps the glibc floor at 2.31, as upstream's release build does.
+    container:
+      image: debian:11
+    env:
+      CUA_TELEMETRY: "0"
+    steps:
+      - name: Install build dependencies
+        run: |
+          cat > /etc/apt/sources.list <<'APT'
+          deb [check-valid-until=no signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://snapshot.debian.org/archive/debian/20260901T000000Z/ bullseye main
+          deb [check-valid-until=no signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://snapshot.debian.org/archive/debian/20260901T000000Z/ bullseye-updates main
+          deb [check-valid-until=no signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://snapshot.debian.org/archive/debian-security/20260901T000000Z/ bullseye-security main
+          APT
+          apt-get -o Dir::Etc::sourceparts=- -o Acquire::Retries=5 update
+          apt-get -o Dir::Etc::sourceparts=- -o Acquire::Retries=5 install -y --no-install-recommends \
+            git ca-certificates curl build-essential pkg-config \
+            libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev libxkbcommon-dev
+          curl -fsSL --retry 3 https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Build (release)
+        working-directory: libs/cua-driver/rust
+        run: cargo build --locked -p cua-driver -p cursor-theme-cli -p cua-driver-sdk --release --features cua-driver/portal-input --target ${{ matrix.target }}
+
+      - name: Package
+        working-directory: libs/cua-driver/rust
+        run: |
+          set -eu
+          stage="cua-driver-rs-dev-linux-${{ matrix.arch }}"
+          out="target/${{ matrix.target }}/release"
+          mkdir -p "dist/$stage"
+          cp "$out/cua-driver" "$out/cua-cursor-theme" "$out/libcua_driver_sdk.so" include/cua_driver_abi.h "dist/$stage/"
+          cp -R ../wayland-helper "dist/$stage/wayland-helper"
+          cp ../../../LICENSE.md "dist/$stage/LICENSE"
+          cp THIRD_PARTY_NOTICES.md "dist/$stage/"
+          tar -czf "dist/$stage.tar.gz" -C dist "$stage"
+          "$out/cua-driver" --version | tee "dist/version-${{ matrix.arch }}.txt"
+
+      - name: Upload
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: dist-${{ matrix.arch }}
+          path: |
+            libs/cua-driver/rust/dist/*.tar.gz
+            libs/cua-driver/rust/dist/version-*.txt
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Download
+        uses: actions/download-artifact@v8.0.2
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      - name: Add provenance and checksums
+        run: |
+          set -eu
+          cat > dist/build-info.json <<EOF
+          {
+            "ref": "${GITHUB_REF_NAME}",
+            "commit": "${GITHUB_SHA}",
+            "upstream": "$(git merge-base origin/main HEAD)",
+            "run_id": "${GITHUB_RUN_ID}",
+            "version_x86_64": "$(cat dist/version-x86_64.txt)",
+            "version_arm64": "$(cat dist/version-arm64.txt)"
+          }
+          EOF
+          rm -f dist/version-*.txt
+          (cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Create dev release
+        uses: softprops/action-gh-release@v3.0.3
+        with:
+          tag_name: dev
+          target_commitish: ${{ github.sha }}
+          name: Dev Build
+          body: |
+            Branch: `${{ github.ref_name }}`
+            Commit: `${{ github.sha }}`
+            Workflow Run: `${{ github.run_id }}`
+          files: dist/*
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          fail_on_unmatched_files: true
+
+      - name: Move dev tag to current commit
+        run: |
+          git tag -f dev "${GITHUB_SHA}"
+          git push origin refs/tags/dev --force
