@@ -15,9 +15,7 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11 fix
 
 | Patch | Upstream |
 |---|---|
-| fail `type_text` when a character cannot be typed | [#4922](https://github.com/trycua/cua/pull/4922) |
-| give each character of a text its own spare keycode | [#4923](https://github.com/trycua/cua/pull/4923) |
-| wait for the focused client before using, restoring or rebinding a borrowed keycode | [#4924](https://github.com/trycua/cua/pull/4924) |
+| wait for the focused client before using or restoring a borrowed keycode | [#4924](https://github.com/trycua/cua/pull/4924) |
 | reuse or restore a borrowed keycode only on the reply to its own ping | [#4924](https://github.com/trycua/cua/pull/4924) |
 | never borrow the MPX warm-up keycode for a character | fork only |
 | never borrow keycode 8, which a virtual keyboard cannot send | fork only |
@@ -26,7 +24,10 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11 fix
 | stop the focus restore when the saved window is gone | fork only |
 | rebase Chromium screen extents only from a frame the size of the target window | fork only |
 
-Upstream already: keep the Chromium screen rebase off a top-level frame that matches its window-manager frame ([#4967](https://github.com/trycua/cua/pull/4967), merged as `6e050d720`).
+Upstream already:
+
+- keep the Chromium screen rebase off a top-level frame that matches its window-manager frame ([#4967](https://github.com/trycua/cua/pull/4967), merged as `6e050d720`);
+- fail `type_text` before typing anything when a character cannot be typed, with one spare keycode per distinct character ([#5139](https://github.com/trycua/cua/pull/5139), salvaged from [#4922](https://github.com/trycua/cua/pull/4922); it also covers [#4923](https://github.com/trycua/cua/pull/4923)).
 
 ## Sync policy
 
