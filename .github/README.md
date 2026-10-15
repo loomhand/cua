@@ -21,7 +21,6 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11 fix
 | keep an ended session's master pointer until the menu its click opened closes | [#4966](https://github.com/trycua/cua/pull/4966) |
 | stop the focus restore when the saved window is gone | fork only |
 | rebase Chromium screen extents only from a frame the size of the target window | fork only |
-| stop a batched text before rebinding keycodes the client has not confirmed reading | fork only |
 
 Before a box image moves its cua-driver pin from `cmgs/backup-20261013/x11-typing` to `dev`:
 
@@ -34,6 +33,7 @@ Upstream already:
 
 - wait for the client, by `_NET_WM_PING` with its own serial and per window its keys went to, before using or restoring a borrowed keycode ([#5172](https://github.com/trycua/cua/pull/5172), salvaged from [#4924](https://github.com/trycua/cua/pull/4924));
 - type a long text in spare-keycode batches ([#5168](https://github.com/trycua/cua/pull/5168));
+- stop a batched text before rebinding keycodes the client has not confirmed reading ([#5244](https://github.com/trycua/cua/pull/5244), salvaged from [#5238](https://github.com/trycua/cua/pull/5238));
 - keep the Chromium screen rebase off a top-level frame that matches its window-manager frame ([#4967](https://github.com/trycua/cua/pull/4967), merged as `6e050d720`);
 - fail `type_text` before typing anything when a character cannot be typed, with one spare keycode per distinct character ([#5139](https://github.com/trycua/cua/pull/5139), salvaged from [#4922](https://github.com/trycua/cua/pull/4922)), and give each character of a text its own spare keycode ([#5158](https://github.com/trycua/cua/pull/5158), the change [#4923](https://github.com/trycua/cua/pull/4923) proposed).
 
