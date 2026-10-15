@@ -50,7 +50,8 @@ gh workflow list -R loomhand/cua --all -L 1000 --json id,path,state --jq '.[] | 
 ```
 
 - Upstream's own workflows stay disabled in this fork; only the `Fork:` workflows run. A sync can bring new upstream workflows, which start active, so the last line runs after every push to `main`.
-- `fix/*` and `cmgs/*` branches are never rebased by a sync.
+- A sync rebases the `fix/*` branches of upstream pull requests that are still open onto the new `main`, so they stay mergeable.
+- `cmgs/*` branches are never rebased by a sync.
 
 ## Builds
 
