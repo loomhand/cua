@@ -21,7 +21,7 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11 fix
 | stop the focus restore when the saved window is gone | fork only |
 | rebase Chromium screen extents only from a frame the size of the target window | fork only |
 
-Before a box image moves its cua-driver pin from `cmgs/backup-20261013/x11-typing` to `dev`:
+Before a box image moves its cua-driver pin to `dev`:
 
 - a desktop box has 19 free keycodes, and `dev` can use 17 of them, since it holds back 8 and 248;
 - the window routes (XSendEvent and XTest to the focused window) type a text with more distinct missing characters than free spare keycodes in batches, upstream since [#5168](https://github.com/trycua/cua/pull/5168);
