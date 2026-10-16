@@ -397,6 +397,7 @@ fn enumerate_windows(
     }
 
     let raw: CFArray<CFTypeRef> = unsafe { CFArray::wrap_under_create_rule(raw_ref as _) };
+    let mut enumerated = Vec::new();
     let mut results = Vec::new();
 
     for item in raw.iter() {
@@ -412,6 +413,7 @@ fn enumerate_windows(
             layer,
             is_on_screen,
         } = description;
+        enumerated.push(window_id);
 
         // Only include layer-0 windows, unless the caller asked for every layer.
         if layer != 0 && layers == LayerFilter::ZeroOnly {
@@ -436,7 +438,24 @@ fn enumerate_windows(
         });
     }
 
-    normalize_z_indices(&mut results);
+    let on_screen_front_to_back: Vec<u32> = if options & kCGWindowListOptionOnScreenOnly == 0 {
+        enumerate_windows(
+            options | kCGWindowListOptionOnScreenOnly,
+            LayerFilter::AnyLayer,
+            None,
+            false,
+        )
+        .windows
+        .iter()
+        .map(|w| w.window_id)
+        .collect()
+    } else {
+        enumerated.clone()
+    };
+    let z_indices = z_indices_from_live_order(&enumerated, &on_screen_front_to_back);
+    for window in &mut results {
+        window.z_index = z_indices.get(&window.window_id).copied().unwrap_or(0);
+    }
 
     if let Some(query) = &space_query {
         for window in &mut results {
@@ -454,12 +473,15 @@ fn enumerate_windows(
     }
 }
 
-/// Number a front-to-back window list with the shared `z_index` contract.
+/// Renumber the ranked windows of a list contiguously with the shared
+/// `z_index` contract, keeping their order; equal ranks keep list order.
 /// Run it after every filter so the returned values stay contiguous.
 pub(crate) fn normalize_z_indices(windows: &mut [WindowInfo]) {
-    let total = windows.len();
-    for (position, window) in windows.iter_mut().enumerate() {
-        window.z_index =
+    let mut ranked: Vec<usize> = (0..windows.len()).collect();
+    ranked.sort_by_key(|&i| std::cmp::Reverse(windows[i].z_index));
+    let total = ranked.len();
+    for (position, i) in ranked.into_iter().enumerate() {
+        windows[i].z_index =
             cua_driver_core::window_target::z_index_from_front_to_back(total, position);
     }
 }
@@ -479,6 +501,35 @@ fn window_on_current_space(
     current_space_id: Option<u64>,
 ) -> Option<bool> {
     Some(space_ids?.contains(&current_space_id?))
+}
+
+fn z_indices_from_live_order(
+    enumerated: &[u32],
+    on_screen_front_to_back: &[u32],
+) -> std::collections::HashMap<u32, usize> {
+    let on_screen: std::collections::HashSet<u32> =
+        on_screen_front_to_back.iter().copied().collect();
+    let front_to_back: Vec<u32> = on_screen_front_to_back
+        .iter()
+        .copied()
+        .chain(
+            enumerated
+                .iter()
+                .copied()
+                .filter(|id| !on_screen.contains(id)),
+        )
+        .collect();
+    let total = front_to_back.len();
+    front_to_back
+        .into_iter()
+        .enumerate()
+        .map(|(position, window_id)| {
+            (
+                window_id,
+                cua_driver_core::window_target::z_index_from_front_to_back(total, position),
+            )
+        })
+        .collect()
 }
 
 fn get_bounds_num(
@@ -911,6 +962,21 @@ mod tests {
             on_current_space: None,
             space_ids: None,
         }
+    }
+
+    #[test]
+    fn z_index_follows_on_screen_order_when_all_windows_order_disagrees() {
+        let all_windows = [30, 20, 40, 10];
+        let on_screen = [10, 20];
+        let z = z_indices_from_live_order(&all_windows, &on_screen);
+        assert_eq!([z[&10], z[&20], z[&30], z[&40]], [3, 2, 1, 0]);
+    }
+
+    #[test]
+    fn on_screen_enumeration_keeps_its_own_order() {
+        let on_screen = [7, 3, 5];
+        let z = z_indices_from_live_order(&on_screen, &on_screen);
+        assert_eq!([z[&7], z[&3], z[&5]], [2, 1, 0]);
     }
 
     #[test]
