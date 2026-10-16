@@ -9,7 +9,6 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11 fix
 | `main` | trycua/cua `main`, fast-forward only, never changed here |
 | `dev` (default) | `main` plus the patches below and the fork workflows |
 | `fix/*` | head branches of the open upstream pull requests |
-| `cmgs/x11-typing`, `cmgs/backup-20261013/x11-typing` | the earlier patched line; released desktop images pin commits on them, so they stay |
 
 ## Patches on dev
 
