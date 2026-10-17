@@ -1,0 +1,166 @@
+# loomhand fork: a v*-loomhand.* tag publishes cua-driver for Linux, macOS and Windows at that tag, unsigned; a published release is never overwritten.
+name: "Fork: Release"
+
+on:
+  push:
+    tags: ["v*-loomhand.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    # Debian 11 keeps the glibc floor at 2.31, as upstream's release build does.
+    container:
+      image: debian:11
+    env:
+      CUA_TELEMETRY: "0"
+    steps:
+      - name: Install build dependencies
+        run: |
+          cat > /etc/apt/sources.list <<'APT'
+          deb [check-valid-until=no signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://snapshot.debian.org/archive/debian/20260901T000000Z/ bullseye main
+          deb [check-valid-until=no signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://snapshot.debian.org/archive/debian/20260901T000000Z/ bullseye-updates main
+          deb [check-valid-until=no signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://snapshot.debian.org/archive/debian-security/20260901T000000Z/ bullseye-security main
+          APT
+          apt-get -o Dir::Etc::sourceparts=- -o Acquire::Retries=5 update
+          apt-get -o Dir::Etc::sourceparts=- -o Acquire::Retries=5 install -y --no-install-recommends \
+            git ca-certificates curl build-essential pkg-config \
+            libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev libxkbcommon-dev
+          curl -fsSL --retry 3 https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Build (release)
+        working-directory: libs/cua-driver/rust
+        run: cargo build --locked -p cua-driver -p cursor-theme-cli --release --features cua-driver/portal-input --target ${{ matrix.target }}
+
+      - name: Package
+        working-directory: libs/cua-driver/rust
+        run: |
+          set -eu
+          stage="cua-driver-${GITHUB_REF_NAME}-linux-${{ matrix.arch }}"
+          out="target/${{ matrix.target }}/release"
+          mkdir -p "dist/$stage"
+          cp "$out/cua-driver" "$out/cua-cursor-theme" "dist/$stage/"
+          cp -R ../wayland-helper "dist/$stage/wayland-helper"
+          cp ../../../LICENSE.md "dist/$stage/LICENSE"
+          cp THIRD_PARTY_NOTICES.md "dist/$stage/"
+          tar -czf "dist/$stage.tar.gz" -C dist "$stage"
+          "$out/cua-driver" --version
+
+      - name: Upload
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: dist-linux-${{ matrix.arch }}
+          path: libs/cua-driver/rust/dist/*.tar.gz
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+          - arch: x86_64
+            target: x86_64-apple-darwin
+    # macos-26 carries the macOS 26 SDK that screencapturekit needs, as upstream's release build notes.
+    runs-on: macos-26
+    env:
+      CUA_TELEMETRY: "0"
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Build (release)
+        working-directory: libs/cua-driver/rust
+        run: |
+          rustup target add ${{ matrix.target }}
+          cargo build --locked -p cua-driver -p cursor-theme-cli --release --target ${{ matrix.target }}
+
+      - name: Package
+        working-directory: libs/cua-driver/rust
+        run: |
+          set -eu
+          stage="cua-driver-${GITHUB_REF_NAME}-macos-${{ matrix.arch }}"
+          out="target/${{ matrix.target }}/release"
+          mkdir -p "dist/$stage"
+          cp "$out/cua-driver" "$out/cua-cursor-theme" "dist/$stage/"
+          cp ../../../LICENSE.md "dist/$stage/LICENSE"
+          cp THIRD_PARTY_NOTICES.md "dist/$stage/"
+          tar -czf "dist/$stage.tar.gz" -C dist "$stage"
+          lipo -info "dist/$stage/cua-driver"
+
+      - name: Upload
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: dist-macos-${{ matrix.arch }}
+          path: libs/cua-driver/rust/dist/*.tar.gz
+
+  windows:
+    runs-on: windows-2025
+    env:
+      CUA_TELEMETRY: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Build (release)
+        working-directory: libs/cua-driver/rust
+        run: cargo build --locked -p cua-driver -p cursor-theme-cli -p cua-driver-uia --release --target x86_64-pc-windows-msvc
+
+      - name: Package
+        working-directory: libs/cua-driver/rust
+        shell: pwsh
+        run: |
+          $stage = "cua-driver-$env:GITHUB_REF_NAME-windows-x86_64"
+          $out = "target/x86_64-pc-windows-msvc/release"
+          New-Item -ItemType Directory -Force -Path "dist/$stage" | Out-Null
+          Copy-Item "$out/cua-driver.exe", "$out/cua-cursor-theme.exe", "$out/cua-driver-uia.exe" "dist/$stage/"
+          Copy-Item "../../../LICENSE.md" "dist/$stage/LICENSE"
+          Copy-Item "THIRD_PARTY_NOTICES.md" "dist/$stage/"
+          Compress-Archive -Path "dist/$stage" -DestinationPath "dist/$stage.zip"
+          & "dist/$stage/cua-driver.exe" --version
+
+      - name: Upload
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: dist-windows-x86_64
+          path: libs/cua-driver/rust/dist/*.zip
+
+  release:
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download
+        uses: actions/download-artifact@v8.0.2
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* -R "$GITHUB_REPOSITORY" --verify-tag --prerelease --latest=false \
+            --title "cua-driver $GITHUB_REF_NAME" \
+            --notes "cua-driver from \`$GITHUB_SHA\` for Linux (x86_64, arm64; glibc 2.31), macOS (arm64, x86_64; 13.0+) and Windows (x86_64). Unsigned and not notarized; \`SHA256SUMS\` lists every archive."
