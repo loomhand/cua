@@ -56,6 +56,7 @@ gh workflow list -R loomhand/cua --all -L 1000 --json id,path,state --jq '.[] | 
 
 - `Fork: CI` checks every push to `dev`: format, the `cua-driver` build and the Linux platform unit tests.
 - `Fork: Build and Release Dev` publishes `cua-driver` for Linux x86_64 and arm64 as the [Dev Build](https://github.com/loomhand/cua/releases/tag/dev) pre-release at tag `dev`, with `SHA256SUMS` and `build-info.json`, built in Debian 11 like upstream's release.
+- `Fork: Release` publishes `cua-driver` for Linux (x86_64, arm64), macOS (arm64, x86_64) and Windows (x86_64) at each `v*-loomhand.*` tag, unsigned, with `SHA256SUMS`; a published release is never overwritten, so consumers pin its archives by sha256.
 
 ## License
 
