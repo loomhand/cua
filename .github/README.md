@@ -1,6 +1,6 @@
 # loomhand/cua
 
-A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11 fixes to `cua-driver`, the screen executor in [loomhand](https://github.com/loomhand) cloud desktops. Every fix is sent upstream; this fork only holds them until they land. Upstream's own README is [README.md](../README.md).
+A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, macOS and Windows fixes to `cua-driver`, the screen executor in [loomhand](https://github.com/loomhand) cloud desktops. Every fix is sent upstream; this fork only holds them until they land. Upstream's own README is [README.md](../README.md).
 
 ## Branches
 
@@ -19,7 +19,11 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11 fix
 | leave focus on a dialog the clicked app opened | [#4965](https://github.com/trycua/cua/pull/4965) |
 | keep an ended session's master pointer until the menu its click opened closes | [#4966](https://github.com/trycua/cua/pull/4966) |
 | stop the focus restore when the saved window is gone | fork only |
-| rebase Chromium screen extents only from a frame the size of the target window | fork only |
+| rebase Chromium screen extents only from a frame the size of the target window | [#5414](https://github.com/trycua/cua/pull/5414) |
+| Windows: wait 40 ms after a foreground desktop click, as after a background one | [#5410](https://github.com/trycua/cua/pull/5410) |
+| macOS: bring_to_front returns at once when the exact window is already the focused frontmost window | [#5411](https://github.com/trycua/cua/pull/5411) |
+| Windows: a desktop click that closes its own target window succeeds | [#5412](https://github.com/trycua/cua/pull/5412) |
+| Windows: list_windows omits the driver's own overlay windows | [#5413](https://github.com/trycua/cua/pull/5413) |
 
 Before a box image moves its cua-driver pin to `dev`:
 
