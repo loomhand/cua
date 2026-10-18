@@ -760,15 +760,11 @@ pub async fn desktop_screenshot_point(x: f64, y: f64) -> (f64, f64) {
     (x / ratio, y / ratio)
 }
 
-/// The main display and its current mode; the desktop pixel ratio holds while
-/// this is unchanged.
 type DisplayModeKey = (u32, i64, u64, u64, u64, u64);
 
 static DESKTOP_PIXEL_RATIO: std::sync::Mutex<Option<(DisplayModeKey, f64)>> =
     std::sync::Mutex::new(None);
 
-/// Native desktop screenshot width over the logical main-display width. A
-/// screenshot measures it once per display mode instead of once per action.
 pub(crate) fn desktop_pixel_ratio() -> f64 {
     cached_desktop_pixel_ratio(&DESKTOP_PIXEL_RATIO, display_mode_key(), || {
         let logical_w = get_screen_size::main_screen_size().map(|(w, _, _)| w as f64)?;
@@ -785,18 +781,14 @@ pub(crate) fn desktop_pixel_ratio() -> f64 {
 }
 
 fn display_mode_key() -> Option<DisplayModeKey> {
-    use core_graphics::display::{CGDisplay, CGDisplayBounds, CGMainDisplayID};
-
-    // SAFETY: CGMainDisplayID / CGDisplayBounds are thread-safe CG APIs.
-    let id = unsafe { CGMainDisplayID() };
-    if id == 0 {
+    let display = core_graphics::display::CGDisplay::main();
+    if display.id == 0 {
         return None;
     }
-    let bounds = unsafe { CGDisplayBounds(id) };
-    let mode = CGDisplay::new(id).display_mode()?;
+    let mode = display.display_mode()?;
     Some((
-        id,
-        bounds.size.width as i64,
+        display.id,
+        display.bounds().size.width as i64,
         mode.width(),
         mode.height(),
         mode.pixel_width(),
@@ -804,8 +796,6 @@ fn display_mode_key() -> Option<DisplayModeKey> {
     ))
 }
 
-/// The ratio stored for `key`, else `measure`'s, stored for `key` when both
-/// exist. A failed measurement returns 1.0 and is measured again next time.
 fn cached_desktop_pixel_ratio(
     cache: &std::sync::Mutex<Option<(DisplayModeKey, f64)>>,
     key: Option<DisplayModeKey>,
