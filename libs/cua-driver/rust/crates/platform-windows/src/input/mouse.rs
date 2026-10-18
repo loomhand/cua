@@ -694,7 +694,6 @@ fn send_click_synthesized_mods_impl(
                  foreground click."
             );
         }
-        // A click that closed its own target leaves no foreground to verify.
         if activate && IsWindow(target).as_bool() {
             let actual = GetForegroundWindow();
             if !crate::win32::foreground_matches_target_or_owned_window(
