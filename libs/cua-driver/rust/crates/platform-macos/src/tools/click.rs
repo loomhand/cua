@@ -450,20 +450,9 @@ impl Tool for ClickTool {
                     Err(refusal) => return refusal,
                 }
             } else {
-                let desktop_ratio = tokio::task::spawn_blocking(|| {
-                    let logical_w =
-                        super::get_screen_size::main_screen_size().map(|(w, _, _)| w as f64);
-                    let shot_w = crate::capture::screenshot_display_bytes()
-                        .ok()
-                        .and_then(|png| crate::capture::png_dimensions(&png).ok())
-                        .map(|(w, _)| w as f64);
-                    match (shot_w, logical_w) {
-                        (Some(sw), Some(lw)) if lw > 0.0 && sw > lw => sw / lw,
-                        _ => 1.0,
-                    }
-                })
-                .await
-                .unwrap_or(1.0);
+                let desktop_ratio = tokio::task::spawn_blocking(super::desktop_pixel_ratio)
+                    .await
+                    .unwrap_or(1.0);
                 (sx_shot / desktop_ratio, sy_shot / desktop_ratio)
             };
             let button = match input.button.unwrap_or(ClickButton::Left) {
