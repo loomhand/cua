@@ -3490,16 +3490,12 @@ impl Tool for ClickTool {
                         )
                     }
                     .as_bool();
-                    let (note, effect) = if closed {
-                        (" The window closed.", "target_closed")
-                    } else {
-                        ("", "unverifiable")
-                    };
+                    let note = if closed { " The window closed." } else { "" };
                     ToolResult::text(format!(
                         "✅ Sent {click_word} via SendInput at screen ({sx},{sy}) on HWND 0x{hwnd_u:x} (desktop scope).{note}"
                     ))
                     // SendInput dispatched but is not driver-verifiable (no read-back).
-                    .with_structured(json!({ "path": "pixel", "verified": false, "effect": effect }))
+                    .with_structured(json!({ "path": "pixel", "verified": false, "effect": "unverifiable", "target_closed": closed }))
                 }
                 Ok(Err(e)) => ToolResult::error(e.to_string()),
                 Err(e) => ToolResult::error(format!("Task error: {e}")),
