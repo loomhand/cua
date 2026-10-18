@@ -3495,7 +3495,7 @@ impl Tool for ClickTool {
                         "✅ Sent {click_word} via SendInput at screen ({sx},{sy}) on HWND 0x{hwnd_u:x} (desktop scope).{note}"
                     ))
                     // SendInput dispatched but is not driver-verifiable (no read-back).
-                    .with_structured(json!({ "path": "pixel", "verified": false, "effect": "unverifiable", "target_closed": closed }))
+                    .with_structured(json!({ "path": "pixel", "verified": false, "effect": "unverifiable" }))
                 }
                 Ok(Err(e)) => ToolResult::error(e.to_string()),
                 Err(e) => ToolResult::error(format!("Task error: {e}")),
