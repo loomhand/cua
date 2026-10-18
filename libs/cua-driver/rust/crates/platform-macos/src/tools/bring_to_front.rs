@@ -213,8 +213,6 @@ fn observe_exact_window(pid: i32, window_id: u32) -> ExactWindowObservation {
     }
 }
 
-/// The exact postcondition already holds and the window is the frontmost
-/// ordinary window, so there is nothing to activate, raise or wait for.
 fn already_front(observation: ExactWindowObservation, pid: i32, window_id: u32) -> bool {
     observation.exact_postcondition(pid, window_id)
         && observation.exact_window_frontmost_ordinary(window_id)
