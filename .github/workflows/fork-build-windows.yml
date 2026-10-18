@@ -1,0 +1,40 @@
+# loomhand fork: a push to a cmgs/build-* branch builds cua-driver for Windows x86_64 as an Actions artifact, with no tag and no release.
+name: "Fork: Build Windows"
+
+on:
+  push:
+    branches: ["cmgs/build-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    env:
+      CUA_TELEMETRY: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Build (release)
+        working-directory: libs/cua-driver/rust
+        run: cargo build --locked -p cua-driver -p cursor-theme-cli --release --target x86_64-pc-windows-msvc
+
+      - name: Package
+        working-directory: libs/cua-driver/rust
+        shell: pwsh
+        run: |
+          $stage = "cua-driver-$env:GITHUB_SHA-windows-x86_64"
+          $out = "target/x86_64-pc-windows-msvc/release"
+          New-Item -ItemType Directory -Force -Path "dist/$stage" | Out-Null
+          Copy-Item "$out/cua-driver.exe", "$out/cua-cursor-theme.exe" "dist/$stage/"
+          Compress-Archive -Path "dist/$stage" -DestinationPath "dist/$stage.zip"
+          (Get-FileHash "dist/$stage.zip" -Algorithm SHA256).Hash
+          & "dist/$stage/cua-driver.exe" --version
+
+      - name: Upload
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: cua-driver-windows-x86_64
+          path: libs/cua-driver/rust/dist/*.zip
