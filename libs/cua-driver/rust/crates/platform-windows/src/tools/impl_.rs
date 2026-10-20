@@ -227,11 +227,11 @@ async fn verified_hit_click(
     count: usize,
     cursor_key: &str,
 ) -> ToolResult {
-    use cua_driver_core::hit_check::{hit_refusal, HIT_MISMATCH};
+    use cua_driver_core::hit_check::{checked_click, hit_refusal, Hit, HIT_CHECK_UNAVAILABLE};
 
     let Some(element) = admitted.clone().filter(|e| e.is_uia()) else {
         return hit_refusal(
-            "hit_check_unavailable",
+            HIT_CHECK_UNAVAILABLE,
             format!("click.verify_hit: element [{idx}] is not a UI Automation element; nothing was sent."),
         );
     };
@@ -246,37 +246,29 @@ async fn verified_hit_click(
         Ok(point) => point,
         Err(refusal) => return refusal,
     };
-    let sent = tokio::task::spawn_blocking(move || -> Result<(), ToolResult> {
-        let (fronted, _) = unsafe {
-            crate::input::force_foreground_assisted(windows::Win32::Foundation::HWND(hwnd as *mut _))
-        };
-        if !fronted {
-            return Err(hit_refusal(
-                "foreground_unavailable",
-                format!("click.verify_hit: window 0x{hwnd:x} of pid {pid} did not come to the front; nothing was sent."),
-            ));
-        }
-        match crate::uia::windows_enum::element_hit_at(element, cx, cy) {
-            Some(true) => {}
-            Some(false) => {
-                return Err(hit_refusal(
-                    HIT_MISMATCH,
-                    format!("click.verify_hit: the element on top at ({cx},{cy}) is not element [{idx}] or inside it; nothing was sent."),
+    let sent = tokio::task::spawn_blocking(move || {
+        checked_click(
+            || unsafe {
+                crate::input::force_foreground_assisted(windows::Win32::Foundation::HWND(
+                    hwnd as *mut _,
                 ))
             }
-            None => {
-                return Err(hit_refusal(
-                    "hit_check_unavailable",
-                    format!("click.verify_hit: UI Automation did not answer the hit test at ({cx},{cy}); nothing was sent."),
-                ))
-            }
-        }
-        crate::input::send_click_synthesized_active_mods(hwnd, cx, cy, count, "left", &[])
-            .map_err(|e| ToolResult::error(e.to_string()))
+            .0,
+            || Some((cx, cy)),
+            |(x, y)| match crate::uia::windows_enum::element_hit_at(element, x, y) {
+                Some(true) => Hit::Target,
+                Some(false) => Hit::Other,
+                None => Hit::Unavailable,
+            },
+            |(x, y)| {
+                crate::input::send_click_synthesized_active_mods(hwnd, x, y, count, "left", &[])
+                    .map_err(|e| e.to_string())
+            },
+        )
     })
     .await;
     match sent {
-        Ok(Ok(())) => {
+        Ok(Ok(_)) => {
             crate::overlay::send_command(
                 cursor_key.to_owned(),
                 cursor_overlay::OverlayCommand::ClickPulse {
