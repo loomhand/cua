@@ -19,6 +19,89 @@ use super::impl_::{
     winui3_background_gesture, ToolState,
 };
 
+/// `click` with `verify_hit`: fronts the element's window, then posts a left
+/// SendInput click at the element's centre only when the UI Automation hit
+/// test there finds the element or a descendant of it.
+async fn verified_hit_click(
+    admitted: &Option<crate::uia::snapshot::RetainedElement>,
+    hwnd: u64,
+    pid: u32,
+    idx: usize,
+    count: usize,
+    cursor_key: &str,
+) -> ToolResult {
+    use cua_driver_core::hit_check::{hit_refusal, HIT_MISMATCH};
+
+    let Some(element) = admitted.clone().filter(|e| e.is_uia()) else {
+        return hit_refusal(
+            "hit_check_unavailable",
+            format!("click.verify_hit: element [{idx}] is not a UI Automation element; nothing was sent."),
+        );
+    };
+    let (cx, cy) = match resolve_onscreen_point_with_scroll(
+        admitted,
+        hwnd,
+        idx,
+        element.center.0,
+        element.center.1,
+        "a verify_hit click",
+    ) {
+        Ok(point) => point,
+        Err(refusal) => return refusal,
+    };
+    let sent = tokio::task::spawn_blocking(move || -> Result<(), ToolResult> {
+        let (fronted, _) = unsafe {
+            crate::input::force_foreground_assisted(windows::Win32::Foundation::HWND(hwnd as *mut _))
+        };
+        if !fronted {
+            return Err(hit_refusal(
+                "foreground_unavailable",
+                format!("click.verify_hit: window 0x{hwnd:x} of pid {pid} did not come to the front; nothing was sent."),
+            ));
+        }
+        match crate::uia::windows_enum::element_hit_at(element, cx, cy) {
+            Some(true) => {}
+            Some(false) => {
+                return Err(hit_refusal(
+                    HIT_MISMATCH,
+                    format!("click.verify_hit: the element on top at ({cx},{cy}) is not element [{idx}] or inside it; nothing was sent."),
+                ))
+            }
+            None => {
+                return Err(hit_refusal(
+                    "hit_check_unavailable",
+                    format!("click.verify_hit: UI Automation did not answer the hit test at ({cx},{cy}); nothing was sent."),
+                ))
+            }
+        }
+        crate::input::send_click_synthesized_active_mods(hwnd, cx, cy, count, "left", &[])
+            .map_err(|e| ToolResult::error(e.to_string()))
+    })
+    .await;
+    match sent {
+        Ok(Ok(())) => {
+            crate::overlay::send_command(
+                cursor_key.to_owned(),
+                cursor_overlay::OverlayCommand::ClickPulse {
+                    x: cx as f64,
+                    y: cy as f64,
+                },
+            );
+            ToolResult::text(format!(
+                "✅ Hit test at the centre ({cx},{cy}) of element [{idx}] found it; posted a left SendInput click there with window 0x{hwnd:x} in front."
+            ))
+            .with_structured(json!({
+                "path": "pixel",
+                "verified": false,
+                "effect": "unverifiable",
+                "hit_verified": true,
+            }))
+        }
+        Ok(Err(refusal)) => refusal,
+        Err(e) => ToolResult::error(format!("Task error: {e}")),
+    }
+}
+
 fn tool_result_text(result: ToolResult) -> String {
     result
         .content
@@ -222,7 +305,8 @@ impl Tool for ClickTool {
                     "modifier": cua_driver_core::tool_schema::modifier_schema(),
                     "from_zoom":{"type":"boolean","description":"When true, x and y are pixel coordinates in the last `zoom` image for this pid. The driver maps them back to window coords."},
                     "scope":{"type":"string","enum":["window","desktop"],"default":"window","description":"Coordinate frame (default \"window\"). Pass \"desktop\" with x,y and no pid/window_id for a screen-absolute click in get_desktop_state coordinates."},
-                    "delivery_mode": crate::input::delivery::delivery_mode_schema()
+                    "delivery_mode": crate::input::delivery::delivery_mode_schema(),
+                    "verify_hit":{"type":"boolean","description":"With element_token: bring the element's window to the front, hit-test the element's centre, and post a left SendInput click there only when the hit element is this element or inside it; otherwise refuse with hit_mismatch and send nothing. Default false."}
                 },"additionalProperties":false
             }),
             read_only: false, destructive: true, idempotent: false, open_world: true,
@@ -427,6 +511,22 @@ impl Tool for ClickTool {
             .get("action")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let verify_hit = args.bool_or("verify_hit", false);
+        if verify_hit
+            && (elem_idx.is_none()
+                || hwnd_opt.is_none()
+                || x.is_some()
+                || y.is_some()
+                || action_req.is_some()
+                || button != "left"
+                || !modifiers.is_empty()
+                || args.get("capture_id").is_some())
+        {
+            return ToolResult::error(
+                "click.verify_hit needs an element_token, the default action, the left button, and no modifier, capture_id or x, y.",
+            )
+            .with_structured(json!({ "code": "invalid_arguments" }));
+        }
 
         // Resolve HWND: explicit, or auto from pid.
         let hwnd = match hwnd_opt {
@@ -486,12 +586,19 @@ impl Tool for ClickTool {
 
         // Arm this only after capture admission so stale or mismatched IDs have
         // no native side effect before the click is refused.
-        let _noact = match (delivery != DeliveryMode::Foreground, hwnd_opt) {
+        let _noact = match (
+            delivery != DeliveryMode::Foreground && !verify_hit,
+            hwnd_opt,
+        ) {
             (true, Some(h)) => Some(crate::input::NoActivateGuard::arm(
                 windows::Win32::Foundation::HWND(h as *mut _),
             )),
             _ => None,
         };
+
+        if let Some(idx) = elem_idx.filter(|_| verify_hit) {
+            return verified_hit_click(&admitted, hwnd, pid, idx, count, &cursor_key).await;
+        }
 
         if let Some(idx) = elem_idx {
             // ── MSAA dispatch (SAL/VCL targets) ────────────────────────────
@@ -1542,5 +1649,42 @@ mod click_capture_id_schema_tests {
         let capture_id = props.get("capture_id").expect("capture_id field present");
         assert_eq!(capture_id["type"], "string");
         assert_eq!(capture_id["minLength"], 1);
+    }
+}
+
+#[cfg(test)]
+mod click_verify_hit_tests {
+    use super::ClickTool;
+    use cua_driver_core::tool::Tool;
+
+    #[test]
+    fn schema_advertises_verify_hit() {
+        let tool = ClickTool {
+            state: super::ToolState::new(None),
+        };
+        let d = tool.def();
+        assert_eq!(
+            d.input_schema["properties"]["verify_hit"]["type"],
+            "boolean"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_hit_without_an_element_token_is_refused_before_any_input() {
+        let tool = ClickTool {
+            state: super::ToolState::new(None),
+        };
+        for args in [
+            serde_json::json!({"pid": 1, "window_id": 2, "x": 10, "y": 10, "verify_hit": true}),
+            serde_json::json!({"pid": 1, "window_id": 2, "verify_hit": true}),
+        ] {
+            let result = tool.invoke(args.clone()).await;
+            assert_eq!(result.is_error, Some(true), "{args}");
+            let code = result
+                .structured_content
+                .as_ref()
+                .map(|s| s["code"].clone());
+            assert_eq!(code, Some(serde_json::json!("invalid_arguments")), "{args}");
+        }
     }
 }
