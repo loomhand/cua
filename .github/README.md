@@ -24,6 +24,7 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | Windows: a desktop click that closes its own target window succeeds | [#5412](https://github.com/trycua/cua/pull/5412) |
 | Windows: list_windows omits the driver's own overlay windows | [#5413](https://github.com/trycua/cua/pull/5413) |
 | macOS: capture the desktop with captureImage(in:) when there is no overlay to leave out | fork only |
+| Linux: restore the active window by bouncing the core focus when only the window manager's record moved (xfwm4 takes the session keyboard's focus as the desktop's) | fork only |
 
 Before a box image moves its cua-driver pin to `dev`:
 
