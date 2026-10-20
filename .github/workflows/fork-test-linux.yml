@@ -1,0 +1,53 @@
+name: "Fork: Test Linux"
+
+on:
+  push:
+    branches: ["cmgs/test-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    env:
+      CUA_TELEMETRY: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang pkg-config libdbus-1-dev libpipewire-0.3-dev libspa-0.2-dev \
+            libei-dev libxkbcommon-dev libx11-dev libxi-dev libxtst-dev libxext-dev \
+            xvfb xauth x11-utils dbus-daemon
+          curl -fsSL --retry 3 https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Format
+        working-directory: libs/cua-driver/rust
+        run: cargo fmt --all --check
+
+      - name: Build cua-driver
+        working-directory: libs/cua-driver/rust
+        run: cargo build --locked -p cua-driver --features cua-driver/portal-input
+
+      - name: Linux platform unit tests
+        working-directory: libs/cua-driver/rust
+        run: xvfb-run -a cargo test --locked -p platform-linux --lib
+
+      - name: X11 keyboard tap timing regression
+        working-directory: libs/cua-driver/rust
+        run: |
+          xvfb-run -a cargo test -p platform-linux --test key_input_x11 \
+            --locked -- --ignored --nocapture --test-threads=1
+
+      - name: X11 click delivery and timing regressions
+        working-directory: libs/cua-driver/rust
+        run: |
+          xvfb-run -a --server-args="-screen 0 640x480x24 -noreset" \
+            cargo test -p platform-linux --test click_input_x11 --locked -- \
+              --ignored --nocapture --test-threads=1
