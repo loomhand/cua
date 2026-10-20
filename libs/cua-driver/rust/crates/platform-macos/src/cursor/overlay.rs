@@ -115,8 +115,8 @@ static OVERLAY_LAST_PAINT: Mutex<Option<Instant>> = Mutex::new(None);
 const OVERLAY_CLEAR_GRACE: Duration = Duration::from_millis(250);
 /// Cursor art and click effects fit within this many points of the anchor.
 const CURSOR_TILE_MARGIN: f64 = 64.0;
-const BADGED_CURSOR_HORIZONTAL_MARGIN: f64 =
-    cursor_overlay::session_badge_extents().horizontal as f64 + 2.0;
+/// The session badge's glow reaches this far past its pill.
+const BADGE_GLOW_PAD: f64 = cursor_overlay::session_badge_extents().above as f64;
 /// The focus rect's 2.5 pt stroke reaches past the rect.
 const FOCUS_RECT_PAD: f64 = 3.0;
 
@@ -194,22 +194,34 @@ fn paint_bounds(map: &RenderMap) -> Option<[f64; 4]> {
             Some([a, b, c, d]) => [a.min(x0), b.min(y0), c.max(x1), d.max(y1)],
         });
     };
+    let (w, h) = (map.platform.win_w, map.platform.win_h);
+    let scale = map.platform.backing_scale.max(1.0);
     for rs in map.cursors.values() {
         let core = &rs.core;
         if !on_main_screen(core.pos) || !core.is_revealed() || core.pinned_target_off_workspace {
             continue;
         }
-        let horizontal = if core.session_badge_is_visible() {
-            BADGED_CURSOR_HORIZONTAL_MARGIN
-        } else {
-            CURSOR_TILE_MARGIN
-        };
         add([
-            core.pos.0 - horizontal,
+            core.pos.0 - CURSOR_TILE_MARGIN,
             core.pos.1 - CURSOR_TILE_MARGIN,
-            core.pos.0 + horizontal,
+            core.pos.0 + CURSOR_TILE_MARGIN,
             core.pos.1 + CURSOR_TILE_MARGIN,
         ]);
+        // The badge is clamped into the screen, so near an edge it shifts
+        // away from the cursor.
+        if let Some(layout) = cursor_overlay::session_badge_layout(core.session_badge_input(
+            ((core.pos.0 * scale) as f32, (core.pos.1 * scale) as f32),
+            scale as f32,
+            Some(((w * scale) as f32, (h * scale) as f32)),
+        )) {
+            let rect = layout.rect;
+            add([
+                f64::from(rect.left()) / scale - BADGE_GLOW_PAD,
+                f64::from(rect.top()) / scale - BADGE_GLOW_PAD,
+                f64::from(rect.right()) / scale + BADGE_GLOW_PAD,
+                f64::from(rect.bottom()) / scale + BADGE_GLOW_PAD,
+            ]);
+        }
         if let Some([x, y, w, h]) = core.effect_bounds() {
             add([x, y, x + w, y + h]);
         }
@@ -223,7 +235,6 @@ fn paint_bounds(map: &RenderMap) -> Option<[f64; 4]> {
         }
     }
     let [x0, y0, x1, y1] = bounds?;
-    let (w, h) = (map.platform.win_w, map.platform.win_h);
     let left = x0.floor().clamp(0.0, w);
     let top = y0.floor().clamp(0.0, h);
     let right = x1.ceil().clamp(0.0, w);
@@ -1654,6 +1665,11 @@ mod tests {
         assert!(!cursor_is_externally_visible(&map.cursors["sessA"]));
     }
 
+    /// Painting at the tile's origin rounds sub-pixel coordinates apart from
+    /// the full-screen paint, which moves an antialiased edge by at most one
+    /// of its 16 coverage samples.
+    const COVERAGE_SAMPLE: u8 = 17;
+
     fn assert_tile_matches_full_screen(map: &RenderMap) {
         let scale = map.platform.backing_scale;
         let mut full = tiny_skia::Pixmap::new(
@@ -1673,17 +1689,28 @@ mod tests {
                     .then(|| tile.pixmap.pixels()[ty * tile.pixmap.width() as usize + tx])
             });
             match in_tile {
-                Some(tile_pixel) => assert_eq!(tile_pixel, *pixel, "pixel ({x}, {y})"),
+                Some(tile_pixel) => {
+                    let channels = |p: tiny_skia::PremultipliedColorU8| {
+                        [p.red(), p.green(), p.blue(), p.alpha()]
+                    };
+                    let close = channels(tile_pixel)
+                        .into_iter()
+                        .zip(channels(*pixel))
+                        .all(|(a, b)| a.abs_diff(b) <= COVERAGE_SAMPLE);
+                    assert!(close, "pixel ({x}, {y}): {tile_pixel:?} vs {pixel:?}");
+                }
                 None => assert_eq!(pixel.alpha(), 0, "pixel ({x}, {y}) outside the tile"),
             }
         }
     }
 
-    /// The tile holds every pixel the full-screen paint draws, unchanged:
-    /// cursor, badge, glide and click effects, and focus rect, at the edges.
+    /// The tile holds every pixel the full-screen paint draws: cursor, badge,
+    /// glide and click effects, and focus rect, also where the screen edge
+    /// clamps the badge.
     #[test]
     fn the_tile_holds_every_pixel_of_the_full_screen_paint() {
         let starts = [(200.0, 150.0), (3.0, 4.0), (397.0, 296.0), (-30.0, 150.0)];
+        let mut badge_frames = 0;
         let focus_rects = [
             None,
             Some([150.0, 100.0, 120.0, 80.0]),
@@ -1705,6 +1732,8 @@ mod tests {
                         assert!(map.seed_start_if_sentinel("sessA", x, y, frame));
                         let cursor = map.cursors.get_mut("sessA").unwrap();
                         if let Some(label) = label {
+                            cursor.core.badge_mode_override =
+                                Some(cursor_overlay::BadgeMode::Verbose);
                             cursor.apply_command(OverlayCommand::SetSessionLabel(label.to_owned()));
                         }
                         cursor.apply_command(OverlayCommand::ShowFocusRect(focus_rect));
@@ -1721,12 +1750,15 @@ mod tests {
                                 cursor.apply_command(OverlayCommand::ClickPulse { x, y });
                             }
                             map.tick_all(1.0 / 60.0);
+                            badge_frames +=
+                                usize::from(map.cursors["sessA"].core.session_badge_is_visible());
                             assert_tile_matches_full_screen(&map);
                         }
                     }
                 }
             }
         }
+        assert!(badge_frames > 0, "no frame showed the session badge");
     }
 
     #[test]
