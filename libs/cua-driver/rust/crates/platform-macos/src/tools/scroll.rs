@@ -575,7 +575,18 @@ impl Tool for ScrollTool {
             )
             .await;
 
-            let changes = super::finish_window_observation(snapshot).await;
+            let changes = if std::env::var_os("CUA_DRIVER_SCROLL_NO_WATCH").is_some() {
+                drop(snapshot);
+                crate::window_change_detector::Changes {
+                    new_windows: Vec::new(),
+                    foreground_changed: false,
+                    earlier_new_windows: Vec::new(),
+                    earlier_foreground_changed: false,
+                    polled: false,
+                }
+            } else {
+                super::finish_window_observation(snapshot).await
+            };
             let mode_label = if fg {
                 " (delivery_mode:foreground)"
             } else {
@@ -674,7 +685,18 @@ impl Tool for ScrollTool {
         )
         .await;
 
-        let changes = super::finish_window_observation(snapshot).await;
+        let changes = if std::env::var_os("CUA_DRIVER_SCROLL_NO_WATCH").is_some() {
+            drop(snapshot);
+            crate::window_change_detector::Changes {
+                new_windows: Vec::new(),
+                foreground_changed: false,
+                earlier_new_windows: Vec::new(),
+                earlier_foreground_changed: false,
+                polled: false,
+            }
+        } else {
+            super::finish_window_observation(snapshot).await
+        };
 
         match result {
             Ok(Ok(())) => ToolResult::text(format!(
