@@ -617,7 +617,7 @@ impl Snapshot {
 
 /// The host's visible layer-0 windows.
 fn host_windows() -> Vec<WindowInfo> {
-    windows::visible_windows()
+    windows::visible_windows_without_spaces()
         .into_iter()
         .filter(|w| w.layer == 0)
         .collect()
