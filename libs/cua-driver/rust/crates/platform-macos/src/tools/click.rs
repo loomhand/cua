@@ -1567,7 +1567,6 @@ async fn verified_hit_click(
             "path": "cgevent_hid",
             "verified": false,
             "effect": "unverifiable",
-            "hit_verified": true,
         })),
         Ok(Err(e)) => ToolResult::error(format!("click.verify_hit: the click failed: {e}")),
         Err(e) => ToolResult::error(format!("task error: {e}")),
