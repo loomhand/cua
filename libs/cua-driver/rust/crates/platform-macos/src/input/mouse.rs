@@ -157,7 +157,7 @@ pub fn click_at_xy_desktop(
     count: usize,
     button: &str,
 ) -> anyhow::Result<()> {
-    click_at_xy_desktop_inner(prompt, x, y, count, button, &[], false)
+    click_at_xy_desktop_inner(prompt, x, y, count, button, &[], false, false)
 }
 
 /// Global HID click with physical modifier transitions. The caller must guard
@@ -170,7 +170,7 @@ pub fn click_at_xy_desktop_with_modifiers(
     button: &str,
     modifiers: &[&str],
 ) -> anyhow::Result<()> {
-    click_at_xy_desktop_inner(prompt, x, y, count, button, modifiers, false)
+    click_at_xy_desktop_inner(prompt, x, y, count, button, modifiers, false, false)
 }
 
 /// Global HID modifier click that restores the user's hardware cursor after
@@ -183,7 +183,29 @@ pub fn click_at_xy_desktop_with_modifiers_preserving_cursor(
     button: &str,
     modifiers: &[&str],
 ) -> anyhow::Result<()> {
-    click_at_xy_desktop_inner(prompt, x, y, count, button, modifiers, true)
+    click_at_xy_desktop_inner(prompt, x, y, count, button, modifiers, true, false)
+}
+
+/// Global HID left click at a point the cursor was already moved to with
+/// [`warp_cursor_for_click`], so nothing waits between the caller's last
+/// check and the mouse-down.
+pub fn click_at_warped_xy_desktop(
+    prompt: PromptInput,
+    x: f64,
+    y: f64,
+    count: usize,
+) -> anyhow::Result<()> {
+    click_at_xy_desktop_inner(prompt, x, y, count, "left", &[], false, true)
+}
+
+/// Warp the hardware cursor to a screen point and let it settle, as a desktop
+/// click does before its mouse-down.
+pub fn warp_cursor_for_click(x: f64, y: f64) {
+    let _ = warp_cursor(CGPoint::new(x, y));
+    // Re-couple cursor + mouse-delta so the synthesized click hit-tests at the
+    // warped point, not the pre-warp one.
+    unsafe { CGAssociateMouseAndMouseCursorPosition(true) };
+    std::thread::sleep(std::time::Duration::from_millis(40));
 }
 
 fn click_at_xy_desktop_inner(
@@ -194,6 +216,7 @@ fn click_at_xy_desktop_inner(
     button: &str,
     modifiers: &[&str],
     preserve_cursor: bool,
+    warped: bool,
 ) -> anyhow::Result<()> {
     crate::security_prompt::refuse_point(prompt, x, y)?;
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
@@ -230,11 +253,9 @@ fn click_at_xy_desktop_inner(
     // cursor, and AppKit hit-tests some clicks against the actual cursor
     // position, so without the warp the down/up can miss the target. Desktop
     // scope is the foreground modality, so moving the visible cursor is expected.
-    let _ = warp_cursor(point);
-    // Re-couple cursor + mouse-delta so the synthesized click hit-tests at the
-    // warped point, not the pre-warp one.
-    unsafe { CGAssociateMouseAndMouseCursorPosition(true) };
-    std::thread::sleep(std::time::Duration::from_millis(40));
+    if !warped {
+        warp_cursor_for_click(x, y);
+    }
     let result = super::keyboard::with_global_modifier_keys(modifiers, |flags| {
         if !modifiers.is_empty() {
             // Prime AppKit's cursor-tracking state after the physical modifiers
@@ -375,7 +396,7 @@ pub fn click_at_xy_desktop_preserving_cursor(
     x: f64,
     y: f64,
 ) -> anyhow::Result<()> {
-    click_at_xy_desktop_inner(prompt, x, y, 1, "left", &[], true)
+    click_at_xy_desktop_inner(prompt, x, y, 1, "left", &[], true, false)
 }
 
 extern "C" {
