@@ -16,12 +16,13 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 |---|---|
 | never borrow the MPX warm-up keycode for a character | fork only |
 | never borrow keycode 8, which a virtual keyboard cannot send | fork only |
-| leave focus on a dialog the clicked app opened | [#4965](https://github.com/trycua/cua/pull/4965) |
 | keep an ended session's master pointer until the menu its click opened closes | [#4966](https://github.com/trycua/cua/pull/4966) |
+| keys for a popup an MPX click opened go through the master keyboard of the session that clicked | [#4966](https://github.com/trycua/cua/pull/4966) |
 | stop the focus restore when the saved window is gone | fork only |
 | rebase Chromium screen extents only from a frame the size of the target window | [#5414](https://github.com/trycua/cua/pull/5414) |
 | Windows: wait 40 ms after a foreground desktop click, as after a background one | [#5410](https://github.com/trycua/cua/pull/5410) |
 | macOS: bring_to_front returns at once when the exact window is already the focused frontmost window | [#5411](https://github.com/trycua/cua/pull/5411) |
+| macOS: bring_to_front skips activation only when AppKit agrees the target is frontmost | [#5411](https://github.com/trycua/cua/pull/5411) |
 | Windows: a desktop click that closes its own target window succeeds | [#5412](https://github.com/trycua/cua/pull/5412) |
 | Windows: list_windows omits the driver's own overlay windows | [#5413](https://github.com/trycua/cua/pull/5413) |
 
@@ -34,6 +35,8 @@ Before a box image moves its cua-driver pin to `dev`:
 
 Upstream already:
 
+- leave focus on a dialog the clicked app opened ([#5258](https://github.com/trycua/cua/pull/5258), salvaged from [#4965](https://github.com/trycua/cua/pull/4965));
+- derive the macOS desktop point ratio from the display mode instead of a screenshot per action ([#5340](https://github.com/trycua/cua/pull/5340));
 - wait for the client, by `_NET_WM_PING` with its own serial and per window its keys went to, before using or restoring a borrowed keycode ([#5172](https://github.com/trycua/cua/pull/5172), salvaged from [#4924](https://github.com/trycua/cua/pull/4924));
 - type a long text in spare-keycode batches ([#5168](https://github.com/trycua/cua/pull/5168));
 - stop a batched text before rebinding keycodes the client has not confirmed reading ([#5244](https://github.com/trycua/cua/pull/5244), salvaged from [#5238](https://github.com/trycua/cua/pull/5238));
