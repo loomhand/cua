@@ -183,7 +183,9 @@ fn paint_main_screen(
 
 /// The main-screen region `[left, top, right, bottom]`, in whole points, that
 /// this frame paints: each drawn cursor's tile grown by its motion effects
-/// and focus rect, clamped to the screen. `None` when nothing paints.
+/// and focus rect, clamped to the screen. A custom theme may paint past the
+/// tile, so a drawn cursor with one takes the whole screen. `None` when
+/// nothing paints.
 fn paint_bounds(map: &RenderMap) -> Option<[f64; 4]> {
     let mut bounds: Option<[f64; 4]> = None;
     let mut add = |[x0, y0, x1, y1]: [f64; 4]| {
@@ -201,6 +203,13 @@ fn paint_bounds(map: &RenderMap) -> Option<[f64; 4]> {
         let core = &rs.core;
         if !on_main_screen(core.pos) || !core.is_revealed() || core.pinned_target_off_workspace {
             continue;
+        }
+        if core
+            .theme
+            .as_ref()
+            .is_some_and(|theme| theme.id != cursor_overlay::DEFAULT_THEME_ID)
+        {
+            add([0.0, 0.0, w, h]);
         }
         add([
             core.pos.0 - CURSOR_TILE_MARGIN,
@@ -1768,6 +1777,20 @@ mod tests {
             }
         }
         assert!(badge_frames > 0, "no frame showed the session badge");
+    }
+
+    #[test]
+    fn a_custom_theme_paints_the_whole_screen() {
+        let mut map = empty_map();
+        placed(&mut map, "sessA");
+        map.platform.win_w = 400.0;
+        map.platform.win_h = 300.0;
+        assert_ne!(paint_bounds(&map), Some([0.0, 0.0, 400.0, 300.0]));
+
+        let mut theme = (*cursor_overlay::embedded_default_theme()).clone();
+        theme.id = "com.example.custom".into();
+        map.cursors.get_mut("sessA").unwrap().core.theme = Some(std::sync::Arc::new(theme));
+        assert_eq!(paint_bounds(&map), Some([0.0, 0.0, 400.0, 300.0]));
     }
 
     #[test]
