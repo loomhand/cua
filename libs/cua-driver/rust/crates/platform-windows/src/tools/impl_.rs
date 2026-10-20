@@ -235,7 +235,7 @@ async fn verified_hit_click(
             format!("click.verify_hit: element [{idx}] is not a UI Automation element; nothing was sent."),
         );
     };
-    let (cx, cy) = match resolve_onscreen_point_with_scroll(
+    if let Err(refusal) = resolve_onscreen_point_with_scroll(
         admitted,
         hwnd,
         idx,
@@ -243,9 +243,9 @@ async fn verified_hit_click(
         element.center.1,
         "a verify_hit click",
     ) {
-        Ok(point) => point,
-        Err(refusal) => return refusal,
-    };
+        return refusal;
+    }
+    let live = element.clone();
     let sent = tokio::task::spawn_blocking(move || {
         checked_click(
             || unsafe {
@@ -254,7 +254,7 @@ async fn verified_hit_click(
                 ))
             }
             .0,
-            || Some((cx, cy)),
+            || crate::uia::windows_enum::element_centre(live),
             |(x, y)| match crate::uia::windows_enum::element_hit_at(element, x, y) {
                 Some(true) => Hit::Target,
                 Some(false) => Hit::Other,
@@ -268,7 +268,7 @@ async fn verified_hit_click(
     })
     .await;
     match sent {
-        Ok(Ok(_)) => {
+        Ok(Ok((cx, cy))) => {
             crate::overlay::send_command(
                 cursor_key.to_owned(),
                 cursor_overlay::OverlayCommand::ClickPulse {
