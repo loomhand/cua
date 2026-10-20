@@ -79,6 +79,7 @@ pub mod expectation;
 pub mod ffmpeg_install;
 pub mod health_report;
 pub mod history;
+pub mod hit_check;
 pub mod image_utils;
 pub mod interactive_input;
 pub mod key_pacing;
