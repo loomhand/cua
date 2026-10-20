@@ -91,6 +91,7 @@ pub mod health_report;
 pub mod history;
 #[cfg(feature = "keyring")]
 pub mod history_keyring;
+pub mod hit_check;
 pub mod image_utils;
 pub mod input_pacing;
 pub mod interactive_input;
