@@ -17,7 +17,7 @@
 use async_trait::async_trait;
 use cua_driver_contract::ClickButton;
 use cua_driver_core::{
-    hit_check::{first_matching_ancestor, hit_refusal, HIT_MISMATCH, MAX_HIT_DEPTH},
+    hit_check::{checked_click, first_matching_ancestor, Hit, MAX_HIT_DEPTH},
     protocol::ToolResult,
     tool::{Tool, ToolDef},
     tool_args::parse_legacy_click_input,
@@ -1527,15 +1527,9 @@ impl Tool for ClickTool {
 /// is the target (pid, window_id).
 /// Whether a background AXPress needs its window to be the app's key window.
 ///
-/// A toolbar or format-bar control in a native app sends its action to the
-/// first responder through the key window (TextEdit's Bold checkbox applies
-/// the trait to the text view that way). With the app behind the user's
-/// window nothing is key, so the press flips the control but the document
-/// does not change. Browsers and Electron shells run page content in their own
-/// process and take no part in this.
-/// `click` with `verify_hit`: fronts the element's window, then posts a left
-/// click at the element's centre only when the hit test there finds the
-/// element or a descendant of it.
+/// `click` with `verify_hit`: glides the cursor to the element, then fronts its
+/// window, hit-tests its centre and posts a left click there, back to back,
+/// only when the element on top is the element or inside it.
 async fn verified_hit_click(
     state: &ToolState,
     pid: i32,
@@ -1545,65 +1539,55 @@ async fn verified_hit_click(
     count: usize,
     cursor_key: String,
 ) -> ToolResult {
-    let checked = tokio::task::spawn_blocking(move || hit_point(pid, wid, &element)).await;
-    let (cx, cy) = match checked {
-        Ok(Ok(point)) => point,
-        Ok(Err(refusal)) => return refusal,
-        Err(e) => return ToolResult::error(format!("task error: {e}")),
-    };
-    crate::cursor::overlay::animate_cursor_to(cursor_key.clone(), cx, cy).await;
-    state.cursor_registry.update_position(&cursor_key, cx, cy);
-    state.cursor_registry.note_press(&cursor_key, cx, cy);
-    let posted = tokio::task::spawn_blocking(move || {
-        crate::input::mouse::click_at_xy_desktop_with_modifiers(cx, cy, count, "left", &[])
+    let probe = element.clone();
+    // SAFETY: `probe` holds a +1 reference on the element for this call.
+    let glide = tokio::task::spawn_blocking(move || unsafe {
+        element_screen_center(probe.as_ptr() as AXUIElementRef)
+    })
+    .await
+    .ok()
+    .flatten();
+    if let Some((x, y)) = glide {
+        crate::cursor::overlay::animate_cursor_to(cursor_key.clone(), x, y).await;
+        state.cursor_registry.update_position(&cursor_key, x, y);
+    }
+    let checked = tokio::task::spawn_blocking(move || {
+        let target = element.as_ptr() as AXUIElementRef;
+        checked_click(
+            || super::bring_to_front::activate_exact_window_blocking(pid, wid),
+            // SAFETY: `element` holds a +1 reference on `target` for this closure.
+            || unsafe { element_screen_center(target) },
+            |(x, y)| hit_at(target, x, y),
+            |(x, y)| {
+                crate::input::mouse::click_at_xy_desktop_with_modifiers(x, y, count, "left", &[])
+                    .map_err(|e| e.to_string())
+            },
+        )
     })
     .await;
-    match posted {
-        Ok(Ok(())) => ToolResult::text(format!(
-            "✅ Hit test at the centre ({cx:.0},{cy:.0}) of element [{idx}] found it; \
-             posted a left click there with window {wid} of pid {pid} in front."
-        ))
-        .with_structured(serde_json::json!({
-            "path": "cgevent_hid",
-            "verified": false,
-            "effect": "unverifiable",
-        })),
-        Ok(Err(e)) => ToolResult::error(format!("click.verify_hit: the click failed: {e}")),
+    match checked {
+        Ok(Ok((cx, cy))) => {
+            state.cursor_registry.note_press(&cursor_key, cx, cy);
+            ToolResult::text(format!(
+                "✅ Hit test at the centre ({cx:.0},{cy:.0}) of element [{idx}] found it; \
+                 posted a left click there with window {wid} of pid {pid} in front."
+            ))
+            .with_structured(serde_json::json!({
+                "path": "cgevent_hid",
+                "verified": false,
+                "effect": "unverifiable",
+            }))
+        }
+        Ok(Err(refusal)) => refusal,
         Err(e) => ToolResult::error(format!("task error: {e}")),
     }
 }
 
-/// The screen centre of `element` once its window is in front, when the
-/// element on top there is `element` or inside it; else the refusal.
-fn hit_point(pid: i32, wid: u32, element: &RetainedElement) -> Result<(f64, f64), ToolResult> {
-    if !super::bring_to_front::activate_exact_window_blocking(pid, wid) {
-        return Err(hit_refusal(
-            "foreground_unavailable",
-            format!(
-                "click.verify_hit: window {wid} of pid {pid} did not come to the front; nothing was sent."
-            ),
-        ));
-    }
-    let target = element.as_ptr() as AXUIElementRef;
-    // SAFETY: `element` holds a +1 reference on `target` for this call.
-    let Some((cx, cy)) = (unsafe { element_screen_center(target) }) else {
-        return Err(hit_refusal(
-            HIT_MISMATCH,
-            "click.verify_hit: the element has no on-screen centre; nothing was sent.".to_owned(),
-        ));
-    };
-    let mismatch = || {
-        hit_refusal(
-            HIT_MISMATCH,
-            format!(
-                "click.verify_hit: the element on top at ({cx:.0},{cy:.0}) is not the target \
-                 element or inside it; nothing was sent."
-            ),
-        )
-    };
+/// What the element on top at screen point `(x, y)` is to `target`.
+fn hit_at(target: AXUIElementRef, x: f64, y: f64) -> Hit {
     // SAFETY: the hit element comes at +1 and its HitNode releases it.
-    let Some(hit) = (unsafe { element_on_screen_at(cx, cy) }).map(HitNode) else {
-        return Err(mismatch());
+    let Some(hit) = (unsafe { element_on_screen_at(x, y) }).map(HitNode) else {
+        return Hit::Unavailable;
     };
     let found = first_matching_ancestor(
         hit,
@@ -1614,8 +1598,9 @@ fn hit_point(pid: i32, wid: u32, element: &RetainedElement) -> Result<(f64, f64)
         |n| Ok(unsafe { CFEqual(n.0 as CFTypeRef, target as CFTypeRef) } != 0),
     );
     match found {
-        Ok(Some(_)) => Ok((cx, cy)),
-        _ => Err(mismatch()),
+        Ok(Some(_)) => Hit::Target,
+        Ok(None) => Hit::Other,
+        Err(()) => Hit::Unavailable,
     }
 }
 
@@ -1629,6 +1614,12 @@ impl Drop for HitNode {
     }
 }
 
+/// A toolbar or format-bar control in a native app sends its action to the
+/// first responder through the key window (TextEdit's Bold checkbox applies
+/// the trait to the text view that way). With the app behind the user's
+/// window nothing is key, so the press flips the control but the document
+/// does not change. Browsers and Electron shells run page content in their own
+/// process and take no part in this.
 fn press_needs_key_window(action: &str, front_pid: Option<i32>, pid: i32, native: bool) -> bool {
     action == "AXPress" && native && front_pid != Some(pid)
 }
