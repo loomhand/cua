@@ -25,6 +25,8 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | Windows: list_windows omits the driver's own overlay windows | [#5413](https://github.com/trycua/cua/pull/5413) |
 | macOS: capture the desktop with captureImage(in:) when there is no overlay to leave out | fork only |
 | Linux: restore the active window by bouncing the core focus when only the window manager's record moved (xfwm4 takes the session keyboard's focus as the desktop's) | fork only |
+| macOS: paint the cursor overlay as a tile around the cursors, not a full-screen frame | fork only |
+| macOS: skip the Space snapshot in the background gate and the window-change detector | fork only |
 
 Before a box image moves its cua-driver pin to `dev`:
 
