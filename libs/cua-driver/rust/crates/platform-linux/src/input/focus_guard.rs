@@ -1074,7 +1074,11 @@ mod grab_tests {
     #[test]
     fn a_bounce_whose_saved_window_is_gone_does_not_restore() {
         // BadMatch: the saved window unmapped before the second request.
-        assert!(!bounce_core_focus(&fake(Some(0x42), 0), 0x42, InputFocus::PARENT));
+        assert!(!bounce_core_focus(
+            &fake(Some(0x42), 0),
+            0x42,
+            InputFocus::PARENT
+        ));
         // The request went through, but the core focus is still not there.
         assert!(!bounce_core_focus(&fake(None, 0), 0x42, InputFocus::PARENT));
     }
