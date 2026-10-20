@@ -291,8 +291,7 @@ async fn verified_hit_click(
                 "path": "pixel",
                 "verified": false,
                 "effect": "unverifiable",
-                "hit_verified": true,
-            }))
+                }))
         }
         Ok(Err(refusal)) => refusal,
         Err(e) => ToolResult::error(format!("Task error: {e}")),
