@@ -14,27 +14,27 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 
 | Patch | Upstream |
 |---|---|
-| never borrow the MPX warm-up keycode for a character | fork only |
-| never borrow keycode 8, which a virtual keyboard cannot send | fork only |
-| keep an ended session's master pointer until the menu its click opened closes | [#4966](https://github.com/trycua/cua/pull/4966) |
-| keys for a popup an MPX click opened go through the master keyboard of the session that clicked | [#4966](https://github.com/trycua/cua/pull/4966) |
-| stop the focus restore when the saved window is gone | fork only |
+| never borrow keycode 8 for a Linux text character | [#5592](https://github.com/trycua/cua/pull/5592) |
+| keys for a popup an MPX click opened go through the master keyboard of the session that clicked | [#5601](https://github.com/trycua/cua/pull/5601) |
+| stop the Linux focus restore when the saved window is gone | [#5593](https://github.com/trycua/cua/pull/5593) |
 | rebase Chromium screen extents only from a frame the size of the target window | [#5414](https://github.com/trycua/cua/pull/5414) |
 | Windows: wait 40 ms after a foreground desktop click, as after a background one | [#5410](https://github.com/trycua/cua/pull/5410) |
 | macOS: bring_to_front returns at once when the exact window is already the focused frontmost window | [#5411](https://github.com/trycua/cua/pull/5411) |
 | macOS: bring_to_front skips activation only when AppKit agrees the target is frontmost | [#5411](https://github.com/trycua/cua/pull/5411) |
 | Windows: a desktop click that closes its own target window succeeds | [#5412](https://github.com/trycua/cua/pull/5412) |
 | Windows: list_windows omits the driver's own overlay windows | [#5413](https://github.com/trycua/cua/pull/5413) |
+| macOS: capture the desktop with captureImage(in:) when there is no overlay to leave out | fork only |
 
 Before a box image moves its cua-driver pin to `dev`:
 
-- a desktop box has 19 free keycodes, and `dev` can use 17 of them, since it holds back 8 and 248;
+- a desktop box has 19 free keycodes, and `dev` can use 18 of them, since it holds back 8;
 - the window routes (XSendEvent and XTest to the focused window) type a text with more distinct missing characters than free spare keycodes in batches, upstream since [#5168](https://github.com/trycua/cua/pull/5168);
 - the virtual-keyboard route and targeted XTest still fail such a text before typing anything; measured before #5168, a single call with 32, 64 or 120 distinct CJK characters typed 0 of 3, and calls of at most 8 distinct characters typed 18 of 18;
 - so the pin moves once the client's typing goes through the window routes, or keeps runs of at most 8 distinct characters on the other routes.
 
 Upstream already:
 
+- keep an ended session's master pointer until the menu its click opened closes ([#5254](https://github.com/trycua/cua/pull/5254), salvaged from [#4966](https://github.com/trycua/cua/pull/4966));
 - leave focus on a dialog the clicked app opened ([#5258](https://github.com/trycua/cua/pull/5258), salvaged from [#4965](https://github.com/trycua/cua/pull/4965));
 - derive the macOS desktop point ratio from the display mode instead of a screenshot per action ([#5340](https://github.com/trycua/cua/pull/5340));
 - wait for the client, by `_NET_WM_PING` with its own serial and per window its keys went to, before using or restoring a borrowed keycode ([#5172](https://github.com/trycua/cua/pull/5172), salvaged from [#4924](https://github.com/trycua/cua/pull/4924));
