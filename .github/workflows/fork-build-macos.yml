@@ -24,6 +24,7 @@ jobs:
       - name: Test and lint the overlay crates
         working-directory: libs/cua-driver/rust
         run: |
+          rustup component add clippy
           cargo test --locked -p platform-macos --lib cursor::overlay
           cargo test --locked -p cursor-overlay --lib
           cargo clippy --locked -p platform-macos -p cursor-overlay --all-targets -- -D warnings
