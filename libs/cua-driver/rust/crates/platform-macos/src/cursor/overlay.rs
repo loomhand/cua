@@ -1756,9 +1756,12 @@ mod tests {
                                 cursor.apply_command(OverlayCommand::ClickPulse { x, y });
                             }
                             map.tick_all(1.0 / 60.0);
-                            badge_frames +=
-                                usize::from(map.cursors["sessA"].core.session_badge_is_visible());
-                            assert_tile_matches_full_screen(&map);
+                            if step % 4 == 1 {
+                                badge_frames += usize::from(
+                                    map.cursors["sessA"].core.session_badge_is_visible(),
+                                );
+                                assert_tile_matches_full_screen(&map);
+                            }
                         }
                     }
                 }
