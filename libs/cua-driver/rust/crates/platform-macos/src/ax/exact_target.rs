@@ -289,6 +289,17 @@ pub fn gather_background_facts(
     window_id: u32,
     element_ptr: Option<usize>,
 ) -> BackgroundTargetFacts {
+    let started = std::time::Instant::now();
+    let facts = gather_background_facts_inner(pid, window_id, element_ptr);
+    crate::phase("gather_background_facts", started);
+    facts
+}
+
+fn gather_background_facts_inner(
+    pid: i32,
+    window_id: u32,
+    element_ptr: Option<usize>,
+) -> BackgroundTargetFacts {
     let window_server = match resolve_window_owner(pid, window_id) {
         WindowOwner::SamePid => WindowServerOwnership::SamePid,
         WindowOwner::Unknown => WindowServerOwnership::NotFound,

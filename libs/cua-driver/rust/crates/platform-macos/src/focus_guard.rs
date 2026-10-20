@@ -109,6 +109,7 @@ where
 
     // Hand key focus back to the user's app if the target opens a menu
     // (popup, select, context menu) while it is in the background.
+    let started = std::time::Instant::now();
     let _key_focus = match target_pid {
         Some(tp) if prior_frontmost != Some(tp) => {
             tokio::task::spawn_blocking(move || crate::key_focus_guard::protect(tp))
@@ -118,8 +119,11 @@ where
         }
         _ => None,
     };
+    crate::phase("key_focus_protect", started);
 
+    let started = std::time::Instant::now();
     let result = f().await;
+    crate::phase("dispatch", started);
 
     // Post-action settle — give the reactive observer time to fire on
     // any side-effect activation before we drop the lease. Matches
@@ -128,6 +132,9 @@ where
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
+    let started = std::time::Instant::now();
+    drop(_key_focus);
+    crate::phase("key_focus_release", started);
     // _lease drops here (RAII end_suppression).
     result
 }

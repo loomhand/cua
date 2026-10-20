@@ -462,7 +462,10 @@ pub(crate) async fn acquire_key_scope(
     let Some(wid) = window_id.filter(|_| !foreground) else {
         return Ok(None);
     };
-    match tokio::task::spawn_blocking(move || key_scope(pid, Some(wid))).await {
+    let started = std::time::Instant::now();
+    let scope = tokio::task::spawn_blocking(move || key_scope(pid, Some(wid))).await;
+    crate::phase("acquire_key_scope", started);
+    match scope {
         Ok(Ok(scope)) => Ok(scope),
         Ok(Err(_)) if crate::input::skylight::windowserver_connection_invalid() => {
             Err(windowserver_connection_refusal(pid, Some(wid)))
@@ -495,8 +498,13 @@ pub(crate) async fn gate_background_window_action(
     element_ptr: Option<usize>,
     action: cua_driver_core::background_input::BackgroundAction,
 ) -> Result<BackgroundMutationLease, cua_driver_core::protocol::ToolResult> {
+    let started = std::time::Instant::now();
     let lease = acquire_background_mutation(pid).await;
-    lease.gate_again(window_id, element_ptr, action).await?;
+    crate::phase("mutation_acquire", started);
+    let started = std::time::Instant::now();
+    let gated = lease.gate_again(window_id, element_ptr, action).await;
+    crate::phase("gate", started);
+    gated?;
     Ok(lease)
 }
 
@@ -515,7 +523,10 @@ pub(crate) async fn acquire_background_mutation(pid: i32) -> BackgroundMutationL
 pub(crate) async fn finish_window_observation(
     snapshot: crate::window_change_detector::Snapshot,
 ) -> crate::window_change_detector::Changes {
-    snapshot.detect_async().await
+    let started = std::time::Instant::now();
+    let changes = snapshot.detect_async().await;
+    crate::phase("finish_window_observation", started);
+    changes
 }
 
 /// px-focus for the keyboard family (type_text / press_key / hotkey): focus the

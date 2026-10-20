@@ -174,6 +174,25 @@ fn enumerate_windows(
     pid_filter: Option<i32>,
     spaces: bool,
 ) -> WindowEnumeration {
+    let started = std::time::Instant::now();
+    let out = enumerate_windows_inner(options, layers, pid_filter, spaces);
+    crate::phase(
+        if spaces {
+            "enumerate_windows+spaces"
+        } else {
+            "enumerate_windows"
+        },
+        started,
+    );
+    out
+}
+
+fn enumerate_windows_inner(
+    options: u32,
+    layers: LayerFilter,
+    pid_filter: Option<i32>,
+    spaces: bool,
+) -> WindowEnumeration {
     use core_foundation::{
         array::CFArray,
         base::{CFGetTypeID, CFTypeRef, TCFType},

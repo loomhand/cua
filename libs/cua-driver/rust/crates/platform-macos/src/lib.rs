@@ -68,6 +68,12 @@ pub mod window_change_detector;
 #[cfg(target_os = "macos")]
 pub mod windows;
 
+pub fn phase(name: &str, started: std::time::Instant) {
+    if std::env::var_os("CUA_DRIVER_PHASES").is_some() {
+        tracing::warn!(target: "cua_phase", "phase {name} {:.1}", started.elapsed().as_secs_f64() * 1000.0);
+    }
+}
+
 use cua_driver_core::tool::ToolRegistry;
 
 /// Install the macOS presence pointer-shape backend (AX hit-test, NSCursor

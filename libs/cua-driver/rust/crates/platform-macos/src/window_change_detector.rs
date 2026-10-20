@@ -344,7 +344,9 @@ impl WindowChangeDetector {
     ) -> Snapshot {
         // A new action supersedes the previous action's detached observation.
         end_tail();
+        let started = Instant::now();
         let window_ids: HashSet<u32> = host_windows().into_iter().map(|w| w.window_id).collect();
+        crate::phase("detector_snapshot", started);
         let mut snapshot = Self::capture_from(window_ids, prior_front, suppress_focus, allowed_pid);
         snapshot.earlier = take_late();
         snapshot
@@ -469,7 +471,14 @@ impl Snapshot {
         // Move the Snapshot (and its embedded lease) onto the blocking
         // thread; the lease's Drop runs there when detect_with returns.
         tokio::task::spawn_blocking(move || {
-            self.detect_bounded_reporting(host_observation_bounds(), report_window, observe_host)
+            let started = Instant::now();
+            let changes = self.detect_bounded_reporting(
+                host_observation_bounds(),
+                report_window,
+                observe_host,
+            );
+            crate::phase("detector_detect", started);
+            changes
         })
         .await
         .unwrap_or_else(|_| Changes::not_polled())

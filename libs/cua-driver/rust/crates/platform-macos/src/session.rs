@@ -63,6 +63,13 @@ extern "C" {
 /// session dictionary is unavailable (no window-server session) or the key is
 /// absent, which is how an unlocked session reports itself.
 pub fn screen_locked() -> bool {
+    let started = std::time::Instant::now();
+    let locked = screen_locked_inner();
+    crate::phase("screen_locked", started);
+    locked
+}
+
+fn screen_locked_inner() -> bool {
     use core_foundation::base::TCFType;
     use core_foundation::boolean::CFBoolean;
     use core_foundation::dictionary::CFDictionary;
