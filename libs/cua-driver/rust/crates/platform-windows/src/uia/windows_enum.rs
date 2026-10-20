@@ -1303,6 +1303,30 @@ pub(crate) fn element_hit_at(
     .flatten()
 }
 
+/// The live centre of `target`'s bounding rectangle in screen pixels; `None`
+/// when it has no area or UI Automation could not answer in time.
+pub(crate) fn element_centre(target: crate::uia::snapshot::RetainedElement) -> Option<(i32, i32)> {
+    run_uia_with_deadline(
+        "verify_hit centre",
+        HIT_CHECK_TIMEOUT,
+        "a hit_mismatch refusal",
+        move || {
+            if !target.is_uia() {
+                return None;
+            }
+            // The snapshot store keeps its own reference; this borrow is never released.
+            let element = std::mem::ManuallyDrop::new(unsafe {
+                IUIAutomationElement::from_raw(target.as_ptr() as *mut _)
+            });
+            let r = unsafe { element.CurrentBoundingRectangle() }.ok()?;
+            (r.right > r.left && r.bottom > r.top)
+                .then_some(((r.left + r.right) / 2, (r.top + r.bottom) / 2))
+        },
+    )
+    .ok()
+    .flatten()
+}
+
 fn element_hit_at_unbounded(
     target: &crate::uia::snapshot::RetainedElement,
     sx: i32,
