@@ -617,10 +617,31 @@ impl Snapshot {
 
 /// The host's visible layer-0 windows.
 fn host_windows() -> Vec<WindowInfo> {
-    windows::visible_windows_without_spaces()
+    let free: Vec<WindowInfo> = windows::visible_windows_without_spaces()
         .into_iter()
         .filter(|w| w.layer == 0)
-        .collect()
+        .collect();
+    if std::env::var_os("CUA_DRIVER_ASSERT_SPACES").is_some() {
+        let key = |windows: &[WindowInfo]| {
+            windows
+                .iter()
+                .filter(|w| w.layer == 0)
+                .map(|w| (w.window_id, w.pid, w.app_name.clone(), w.title.clone()))
+                .collect::<Vec<_>>()
+        };
+        let full = windows::visible_windows();
+        let (a, b) = (key(&free), key(&full));
+        tracing::warn!(
+            target: "cua_assert",
+            "assert detector rows_equal={} free={} full={} only_free={:?} only_full={:?}",
+            a == b,
+            a.len(),
+            b.len(),
+            a.iter().filter(|r| !b.contains(r)).map(|r| r.0).collect::<Vec<_>>(),
+            b.iter().filter(|r| !a.contains(r)).map(|r| r.0).collect::<Vec<_>>()
+        );
+    }
+    free
 }
 
 /// One live observation for the poll loop: layer-0 windows and the frontmost pid.

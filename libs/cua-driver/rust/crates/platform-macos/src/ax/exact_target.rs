@@ -360,6 +360,45 @@ fn gather_background_facts_inner(
         &records,
         target.is_some() && focused_window_id == Some(window_id),
     );
+    if std::env::var_os("CUA_DRIVER_ASSERT_SPACES").is_some() {
+        let rows = |windows: Vec<crate::windows::WindowInfo>| {
+            windows
+                .iter()
+                .map(|w| {
+                    (
+                        w.pid,
+                        w.window_id,
+                        w.is_on_screen && w.bounds.width >= 2.0 && w.bounds.height >= 2.0,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let free = rows(all_windows_without_spaces());
+        let full = rows(crate::windows::all_windows());
+        let count = |rows: &[(i32, u32, bool)]| {
+            count_competing_keyboard_destinations(
+                pid,
+                window_id,
+                rows.iter().map(|&(pid, window_id, visible)| WindowServerRow {
+                    pid,
+                    window_id,
+                    visible,
+                }),
+                &records,
+                target.is_some() && focused_window_id == Some(window_id),
+            )
+        };
+        tracing::warn!(
+            target: "cua_assert",
+            "assert gate pid={pid} window={window_id} rows_equal={} free={} full={} decision_free={} decision_full={} target_rows={:?}",
+            free == full,
+            free.len(),
+            full.len(),
+            count(&free),
+            count(&full),
+            full.iter().filter(|row| row.0 == pid).collect::<Vec<_>>()
+        );
+    }
 
     BackgroundTargetFacts {
         window_server,
