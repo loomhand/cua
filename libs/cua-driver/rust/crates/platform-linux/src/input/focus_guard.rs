@@ -665,7 +665,12 @@ impl FocusSnapshot {
         // Same-app rule: the focus stayed inside the target application
         // (it opened a dialog). Leave it and say so.
         let new_owner = focus_window.and_then(|w| x.owner_pid(w));
+        let wm_only = self.core_focus > 1
+            && x.core_focus().0 == self.core_focus
+            && x.stacking_top() == self.stacking_top
+            && x.active_window() != self.active;
         if target_owns_focus
+            && !wm_only
             && classify_focus_move(target_pid, self.previous_owner, new_owner)
                 == FocusMove::SameAppDialog
         {
@@ -693,7 +698,7 @@ impl FocusSnapshot {
         let mut stable = 0;
         let mut resent = 0;
         let deadline = started + RESTORE_BUDGET;
-        self.reassert(&x);
+        self.reassert(&x, wm_only);
         while Instant::now() < deadline {
             std::thread::sleep(RESTORE_POLL);
             let now = self.diff(&x);
@@ -708,7 +713,7 @@ impl FocusSnapshot {
             stable = 0;
             if resent < 2 {
                 resent += 1;
-                self.reassert(&x);
+                self.reassert(&x, wm_only);
             }
         }
         if !report.restored {
@@ -766,7 +771,12 @@ impl FocusSnapshot {
         })
     }
 
-    fn reassert(&self, x: &X) {
+    fn reassert(&self, x: &X, wm_only: bool) {
+        if wm_only {
+            x.set_focus(x11rb::NONE, InputFocus::NONE);
+            x.set_focus(self.core_focus, self.revert_to);
+            return;
+        }
         if let Some(prev) = self.active {
             x.activate(prev, x.active_window().unwrap_or(0));
         }
