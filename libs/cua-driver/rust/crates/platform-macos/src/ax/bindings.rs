@@ -51,6 +51,7 @@ pub const kAXValueIllegalType: AXValueType = 1_000;
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     pub fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
+    pub fn AXUIElementCreateSystemWide() -> AXUIElementRef;
     pub fn AXUIElementCopyAttributeValue(
         element: AXUIElementRef,
         attribute: CFStringRef,
@@ -118,6 +119,24 @@ pub unsafe fn element_at_screen_position(pid: i32, x: f64, y: f64) -> Option<AXU
     let mut element = std::ptr::null_mut();
     let error = AXUIElementCopyElementAtPosition(application, x as f32, y as f32, &mut element);
     CFRelease(application as CFTypeRef);
+    (error == kAXErrorSuccess && !element.is_null()).then_some(element)
+}
+
+/// Hit-test the whole screen at a point, so the element of the window on top
+/// there answers. The returned element is retained and must be released by
+/// the caller.
+///
+/// # Safety
+///
+/// The caller must release any returned element exactly once with `CFRelease`.
+pub unsafe fn element_on_screen_at(x: f64, y: f64) -> Option<AXUIElementRef> {
+    let system = AXUIElementCreateSystemWide();
+    if system.is_null() {
+        return None;
+    }
+    let mut element = std::ptr::null_mut();
+    let error = AXUIElementCopyElementAtPosition(system, x as f32, y as f32, &mut element);
+    CFRelease(system as CFTypeRef);
     (error == kAXErrorSuccess && !element.is_null()).then_some(element)
 }
 
