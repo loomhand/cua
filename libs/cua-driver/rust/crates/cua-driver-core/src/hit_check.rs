@@ -8,6 +8,68 @@ use crate::protocol::ToolResult;
 pub const MAX_HIT_DEPTH: usize = 16;
 /// The refusal code when the hit test finds another element at the centre.
 pub const HIT_MISMATCH: &str = "hit_mismatch";
+/// The refusal code when the hit test itself fails.
+pub const HIT_CHECK_UNAVAILABLE: &str = "hit_check_unavailable";
+/// The refusal code when the target's window does not come to the front.
+pub const FOREGROUND_UNAVAILABLE: &str = "foreground_unavailable";
+
+/// What the hit test at the target's centre found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hit {
+    /// The target or an element inside it.
+    Target,
+    /// Another element.
+    Other,
+    /// No answer: the hit test or the walk up from it failed.
+    Unavailable,
+}
+
+/// Fronts the target's window, reads the target's centre, hit-tests there and
+/// posts the click, back to back with nothing awaited between them; the point
+/// clicked, or the refusal when nothing was sent.
+pub fn checked_click<P: Copy + std::fmt::Debug>(
+    front: impl FnOnce() -> bool,
+    centre: impl FnOnce() -> Option<P>,
+    hit: impl FnOnce(P) -> Hit,
+    post: impl FnOnce(P) -> Result<(), String>,
+) -> Result<P, ToolResult> {
+    if !front() {
+        return Err(hit_refusal(
+            FOREGROUND_UNAVAILABLE,
+            "click.verify_hit: the element's window did not come to the front; nothing was sent."
+                .to_owned(),
+        ));
+    }
+    let Some(at) = centre() else {
+        return Err(hit_refusal(
+            HIT_MISMATCH,
+            "click.verify_hit: the element has no on-screen centre; nothing was sent.".to_owned(),
+        ));
+    };
+    match hit(at) {
+        Hit::Target => {}
+        Hit::Other => {
+            return Err(hit_refusal(
+                HIT_MISMATCH,
+                format!(
+                    "click.verify_hit: the element on top at {at:?} is not the target element or inside it; nothing was sent."
+                ),
+            ))
+        }
+        Hit::Unavailable => {
+            return Err(hit_refusal(
+                HIT_CHECK_UNAVAILABLE,
+                format!("click.verify_hit: the hit test at {at:?} failed; nothing was sent."),
+            ))
+        }
+    }
+    post(at).map_err(|e| {
+        ToolResult::error(format!(
+            "click.verify_hit: the click at {at:?} failed after it was sent: {e}"
+        ))
+    })?;
+    Ok(at)
+}
 
 /// The depth of the first of `start` and its ancestors that `is_target`
 /// accepts, at most `max_depth` parents up; `None` when the walk ends first.
@@ -77,6 +139,105 @@ mod tests {
             |n| Ok(*n == 0),
         );
         assert_eq!(got, Err("parent read failed".to_owned()));
+    }
+
+    fn run(
+        front: bool,
+        hit: Hit,
+        post: Result<(), String>,
+    ) -> (Result<(i32, i32), ToolResult>, Vec<&'static str>) {
+        let steps = std::cell::RefCell::new(Vec::new());
+        let out = checked_click(
+            || {
+                steps.borrow_mut().push("front");
+                front
+            },
+            || {
+                steps.borrow_mut().push("centre");
+                Some((3, 4))
+            },
+            |_| {
+                steps.borrow_mut().push("hit");
+                hit
+            },
+            |_| {
+                steps.borrow_mut().push("post");
+                post
+            },
+        );
+        (out, steps.into_inner())
+    }
+
+    fn code(result: &Result<(i32, i32), ToolResult>) -> serde_json::Value {
+        let refused = result.as_ref().err().expect("a refusal");
+        refused
+            .structured_content
+            .as_ref()
+            .map_or(serde_json::Value::Null, |s| s["code"].clone())
+    }
+
+    #[test]
+    fn a_check_fronts_reads_the_centre_hits_and_posts_in_that_order() {
+        let (out, steps) = run(true, Hit::Target, Ok(()));
+        assert_eq!(out.ok(), Some((3, 4)));
+        assert_eq!(steps, ["front", "centre", "hit", "post"]);
+    }
+
+    #[test]
+    fn a_window_that_stays_behind_or_a_failed_or_foreign_hit_sends_nothing() {
+        let (out, steps) = run(false, Hit::Target, Ok(()));
+        assert_eq!(
+            (code(&out), steps),
+            (serde_json::json!(FOREGROUND_UNAVAILABLE), vec!["front"])
+        );
+        let (out, steps) = run(true, Hit::Other, Ok(()));
+        assert_eq!(
+            (code(&out), steps),
+            (
+                serde_json::json!(HIT_MISMATCH),
+                vec!["front", "centre", "hit"]
+            )
+        );
+        let (out, steps) = run(true, Hit::Unavailable, Ok(()));
+        assert_eq!(
+            (code(&out), steps),
+            (
+                serde_json::json!(HIT_CHECK_UNAVAILABLE),
+                vec!["front", "centre", "hit"]
+            )
+        );
+    }
+
+    #[test]
+    fn a_target_covered_while_the_cursor_glided_is_not_clicked() {
+        let covered = std::cell::Cell::new(false);
+        let glide = || covered.set(true);
+        glide();
+        let posted = std::cell::Cell::new(false);
+        let out = checked_click(
+            || true,
+            || Some((3, 4)),
+            |_| {
+                if covered.get() {
+                    Hit::Other
+                } else {
+                    Hit::Target
+                }
+            },
+            |_| {
+                posted.set(true);
+                Ok(())
+            },
+        );
+        assert_eq!(code(&out), serde_json::json!(HIT_MISMATCH));
+        assert!(!posted.get());
+    }
+
+    #[test]
+    fn a_click_that_failed_after_sending_is_an_error_not_a_refusal() {
+        let (out, steps) = run(true, Hit::Target, Err("mouse up".to_owned()));
+        assert_eq!(steps, ["front", "centre", "hit", "post"]);
+        assert_eq!(code(&out), serde_json::Value::Null);
     }
 
     #[test]
