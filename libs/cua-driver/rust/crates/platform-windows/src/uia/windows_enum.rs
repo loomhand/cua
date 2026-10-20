@@ -1244,6 +1244,8 @@ pub(crate) type PointShapeChain = (
 /// Budget for the presence hit-test's UIA work. Short: a hover cursor that
 /// misses its deadline just falls back to the arrow.
 const POINT_SHAPE_TIMEOUT: Duration = Duration::from_millis(150);
+/// `click` `verify_hit`: the hit test and the ancestor walk at one point.
+const HIT_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
 /// How far up to look for an enclosing `Document` from page text.
 const POINT_SHAPE_DOCUMENT_DEPTH: usize = 16;
 
@@ -1266,6 +1268,55 @@ pub(crate) fn point_shape_chain(sx: i32, sy: i32) -> Option<PointShapeChain> {
     )
     .ok()
     .flatten()
+}
+
+/// Whether the element on top at screen point `(sx, sy)` is `target` or inside
+/// it; `None` when UI Automation could not answer in time.
+pub(crate) fn element_hit_at(
+    target: crate::uia::snapshot::RetainedElement,
+    sx: i32,
+    sy: i32,
+) -> Option<bool> {
+    run_uia_with_deadline(
+        "verify_hit",
+        HIT_CHECK_TIMEOUT,
+        "a hit_mismatch refusal",
+        move || element_hit_at_unbounded(&target, sx, sy),
+    )
+    .ok()
+    .flatten()
+}
+
+fn element_hit_at_unbounded(
+    target: &crate::uia::snapshot::RetainedElement,
+    sx: i32,
+    sy: i32,
+) -> Option<bool> {
+    use cua_driver_core::hit_check::{first_matching_ancestor, MAX_HIT_DEPTH};
+    use windows::Win32::Foundation::POINT;
+
+    if !target.is_uia() {
+        return None;
+    }
+    // Keep this first so COM interfaces drop before CoUninitialize.
+    let _com = ComInit::new();
+    let uia = get_uia()?;
+    // The snapshot store keeps its own reference; this borrow is never released.
+    let wanted = std::mem::ManuallyDrop::new(unsafe {
+        IUIAutomationElement::from_raw(target.as_ptr() as *mut _)
+    });
+    unsafe {
+        let hit = uia.ElementFromPoint(POINT { x: sx, y: sy }).ok()?;
+        let walker = uia.ControlViewWalker().ok()?;
+        first_matching_ancestor(
+            hit,
+            MAX_HIT_DEPTH,
+            |e| Ok(walker.GetParentElement(e).ok()),
+            |e| uia.CompareElements(e, &*wanted).map(|same| same.as_bool()),
+        )
+        .ok()
+        .map(|depth| depth.is_some())
+    }
 }
 
 fn point_shape_chain_unbounded(sx: i32, sy: i32) -> Option<PointShapeChain> {

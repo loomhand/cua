@@ -17,6 +17,7 @@
 use async_trait::async_trait;
 use cua_driver_contract::ClickButton;
 use cua_driver_core::{
+    hit_check::{first_matching_ancestor, hit_refusal, HIT_MISMATCH, MAX_HIT_DEPTH},
     protocol::ToolResult,
     tool::{Tool, ToolDef},
     tool_args::parse_legacy_click_input,
@@ -27,12 +28,13 @@ use std::sync::Arc;
 use crate::apps;
 use crate::ax::bindings::{
     copy_action_names, copy_bool_attr, copy_children, copy_element_attr, copy_string_attr,
-    element_at_screen_position, element_screen_rect, kAXErrorSuccess, AXUIElementPerformAction,
-    AXUIElementRef,
+    element_at_screen_position, element_on_screen_at, element_screen_center, element_screen_rect,
+    kAXErrorSuccess, AXUIElementPerformAction, AXUIElementRef,
 };
+use crate::ax::snapshot::RetainedElement;
 use crate::focus_guard;
 use crate::window_change_detector::WindowChangeDetector;
-use core_foundation::base::{CFRelease, CFTypeRef, TCFType};
+use core_foundation::base::{CFEqual, CFRelease, CFTypeRef, TCFType};
 
 use super::pixel_route::PixelClickRoute;
 use super::ToolState;
@@ -343,7 +345,8 @@ fn def() -> &'static ToolDef {
                     "enum": ["left", "right", "middle"],
                     "description": "Mouse button. Default left."
                 },
-                "count":         { "type": "integer", "description": "Click count (pixel path only). Default 1." },
+                "count":         { "type": "integer", "description": "Click count (pixel path, or element path with verify_hit). Default 1." },
+                "verify_hit":    { "type": "boolean", "description": "With element_token: bring the element's window to the front, hit-test the element's centre, and post a left pixel click there only when the hit element is this element or inside it; otherwise refuse with hit_mismatch and send nothing. Default false." },
                 "modifier": {
                     "type": "array",
                     "items": { "type": "string" },
@@ -569,6 +572,22 @@ impl Tool for ClickTool {
         let debug_image_out = args.opt_str("debug_image_out");
         let modifiers: Vec<String> = args.str_array("modifier");
 
+        let verify_hit = args.bool_or("verify_hit", false);
+        if verify_hit
+            && (element_guard.is_none()
+                || window_id.is_none()
+                || x.is_some()
+                || y.is_some()
+                || action != "press"
+                || button_str != "left"
+                || !modifiers.is_empty())
+        {
+            return ToolResult::error(
+                "click.verify_hit needs an element_token, the default press action, the left button, and no modifier or x, y.",
+            )
+            .with_structured(serde_json::json!({ "code": "invalid_arguments" }));
+        }
+
         // PID-routed key transitions can look correct for one AX poll and then
         // collapse to a plain click once AppKit resolves the gesture. Refuse
         // that false-success path. The explicit foreground rung uses physical
@@ -591,6 +610,18 @@ impl Tool for ClickTool {
         if let (Some(idx), Some(wid), Some(element_guard)) =
             (element_index, window_id, element_guard)
         {
+            if verify_hit {
+                return verified_hit_click(
+                    &self.state,
+                    pid,
+                    idx,
+                    wid,
+                    element_guard,
+                    count,
+                    cursor_key,
+                )
+                .await;
+            }
             let element_ptr = element_guard.as_ptr();
 
             // ── Exact-target background gate (macOS background input v1) ──
@@ -1502,6 +1533,103 @@ impl Tool for ClickTool {
 /// window nothing is key, so the press flips the control but the document
 /// does not change. Browsers and Electron shells run page content in their own
 /// process and take no part in this.
+/// `click` with `verify_hit`: fronts the element's window, then posts a left
+/// click at the element's centre only when the hit test there finds the
+/// element or a descendant of it.
+async fn verified_hit_click(
+    state: &ToolState,
+    pid: i32,
+    idx: usize,
+    wid: u32,
+    element: RetainedElement,
+    count: usize,
+    cursor_key: String,
+) -> ToolResult {
+    let checked = tokio::task::spawn_blocking(move || hit_point(pid, wid, &element)).await;
+    let (cx, cy) = match checked {
+        Ok(Ok(point)) => point,
+        Ok(Err(refusal)) => return refusal,
+        Err(e) => return ToolResult::error(format!("task error: {e}")),
+    };
+    crate::cursor::overlay::animate_cursor_to(cursor_key.clone(), cx, cy).await;
+    state.cursor_registry.update_position(&cursor_key, cx, cy);
+    state.cursor_registry.note_press(&cursor_key, cx, cy);
+    let posted = tokio::task::spawn_blocking(move || {
+        crate::input::mouse::click_at_xy_desktop_with_modifiers(cx, cy, count, "left", &[])
+    })
+    .await;
+    match posted {
+        Ok(Ok(())) => ToolResult::text(format!(
+            "✅ Hit test at the centre ({cx:.0},{cy:.0}) of element [{idx}] found it; \
+             posted a left click there with window {wid} of pid {pid} in front."
+        ))
+        .with_structured(serde_json::json!({
+            "path": "cgevent_hid",
+            "verified": false,
+            "effect": "unverifiable",
+            "hit_verified": true,
+        })),
+        Ok(Err(e)) => ToolResult::error(format!("click.verify_hit: the click failed: {e}")),
+        Err(e) => ToolResult::error(format!("task error: {e}")),
+    }
+}
+
+/// The screen centre of `element` once its window is in front, when the
+/// element on top there is `element` or inside it; else the refusal.
+fn hit_point(pid: i32, wid: u32, element: &RetainedElement) -> Result<(f64, f64), ToolResult> {
+    if !super::bring_to_front::activate_exact_window_blocking(pid, wid) {
+        return Err(hit_refusal(
+            "foreground_unavailable",
+            format!(
+                "click.verify_hit: window {wid} of pid {pid} did not come to the front; nothing was sent."
+            ),
+        ));
+    }
+    let target = element.as_ptr() as AXUIElementRef;
+    // SAFETY: `element` holds a +1 reference on `target` for this call.
+    let Some((cx, cy)) = (unsafe { element_screen_center(target) }) else {
+        return Err(hit_refusal(
+            HIT_MISMATCH,
+            "click.verify_hit: the element has no on-screen centre; nothing was sent.".to_owned(),
+        ));
+    };
+    let mismatch = || {
+        hit_refusal(
+            HIT_MISMATCH,
+            format!(
+                "click.verify_hit: the element on top at ({cx:.0},{cy:.0}) is not the target \
+                 element or inside it; nothing was sent."
+            ),
+        )
+    };
+    // SAFETY: the hit element comes at +1 and its HitNode releases it.
+    let Some(hit) = (unsafe { element_on_screen_at(cx, cy) }).map(HitNode) else {
+        return Err(mismatch());
+    };
+    let found = first_matching_ancestor(
+        hit,
+        MAX_HIT_DEPTH,
+        // SAFETY: `n.0` is a live element its HitNode owns; the parent comes at +1.
+        |n| Ok::<_, ()>(unsafe { copy_element_attr(n.0, "AXParent") }.map(HitNode)),
+        // SAFETY: both elements are live for the comparison.
+        |n| Ok(unsafe { CFEqual(n.0 as CFTypeRef, target as CFTypeRef) } != 0),
+    );
+    match found {
+        Ok(Some(_)) => Ok((cx, cy)),
+        _ => Err(mismatch()),
+    }
+}
+
+/// An AX element at +1, released on drop.
+struct HitNode(AXUIElementRef);
+
+impl Drop for HitNode {
+    fn drop(&mut self) {
+        // SAFETY: the node owns one reference on a live element.
+        unsafe { CFRelease(self.0 as CFTypeRef) };
+    }
+}
+
 fn press_needs_key_window(action: &str, front_pid: Option<i32>, pid: i32, native: bool) -> bool {
     action == "AXPress" && native && front_pid != Some(pid)
 }
@@ -2053,6 +2181,25 @@ mod tests {
         assert!(enum_vals.contains(&"right"));
         assert!(enum_vals.contains(&"middle"));
         assert_eq!(props["capture_id"]["type"], "string");
+        assert_eq!(props["verify_hit"]["type"], "boolean");
+    }
+
+    #[tokio::test]
+    async fn verify_hit_without_an_element_token_or_with_another_action_is_refused_before_any_input(
+    ) {
+        let tool = ClickTool::new(Arc::new(ToolState::new(false, true, None)));
+        for args in [
+            serde_json::json!({"pid": 1, "window_id": 2, "x": 10, "y": 10, "verify_hit": true}),
+            serde_json::json!({"pid": 1, "window_id": 2, "verify_hit": true}),
+        ] {
+            let result = tool.invoke(args.clone()).await;
+            assert_eq!(result.is_error, Some(true), "{args}");
+            let code = result
+                .structured_content
+                .as_ref()
+                .map(|s| s["code"].clone());
+            assert_eq!(code, Some(serde_json::json!("invalid_arguments")), "{args}");
+        }
     }
 
     /// Surface 5 hard constraint: the tool description must mention the
