@@ -1,0 +1,42 @@
+name: "Fork: Build macOS"
+
+on:
+  push:
+    branches: ["cmgs/build-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    env:
+      CUA_TELEMETRY: "0"
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Test and lint the overlay crates
+        working-directory: libs/cua-driver/rust
+        run: |
+          rustup component add clippy
+          cargo test --locked -p platform-macos --lib cursor::overlay
+          cargo test --locked -p cursor-overlay --lib
+          cargo clippy --locked -p platform-macos -p cursor-overlay --all-targets
+
+      - name: Build (release)
+        working-directory: libs/cua-driver/rust
+        run: |
+          rustup target add x86_64-apple-darwin
+          cargo build --locked -p cua-driver --release --target x86_64-apple-darwin
+
+      - name: Upload
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: cua-driver-macos-x86_64-${{ matrix.runner }}
+          path: libs/cua-driver/rust/target/x86_64-apple-darwin/release/cua-driver
