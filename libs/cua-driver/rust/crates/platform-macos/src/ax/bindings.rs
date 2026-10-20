@@ -678,6 +678,33 @@ pub unsafe fn copy_element_attr(
     Some(value as AXUIElementRef)
 }
 
+/// Copy an element's `AXParent`, retained for the caller to release: `Ok(None)`
+/// at the root, where the attribute has no value, and the AX error when the
+/// read itself fails.
+///
+/// # Safety
+///
+/// `element` must be valid, and the caller must release any returned element.
+pub unsafe fn copy_parent(element: AXUIElementRef) -> Result<Option<AXUIElementRef>, AXError> {
+    let attr = CFStr::new("AXParent");
+    let mut value: CFTypeRef = std::ptr::null();
+    let err = AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value);
+    if err == kAXErrorNoValue || err == kAXErrorAttributeUnsupported {
+        return Ok(None);
+    }
+    if err != kAXErrorSuccess {
+        return Err(err);
+    }
+    if value.is_null() {
+        return Ok(None);
+    }
+    if core_foundation::base::CFGetTypeID(value) != AXUIElementGetTypeID() {
+        CFRelease(value);
+        return Err(kAXErrorFailure);
+    }
+    Ok(Some(value as AXUIElementRef))
+}
+
 /// Perform an AX action using a string attribute name.
 ///
 /// # Safety

@@ -27,9 +27,9 @@ use std::sync::Arc;
 
 use crate::apps;
 use crate::ax::bindings::{
-    copy_action_names, copy_bool_attr, copy_children, copy_element_attr, copy_string_attr,
-    element_at_screen_position, element_on_screen_at, element_screen_center, element_screen_rect,
-    kAXErrorSuccess, AXUIElementPerformAction, AXUIElementRef,
+    copy_action_names, copy_bool_attr, copy_children, copy_element_attr, copy_parent,
+    copy_string_attr, element_at_screen_position, element_on_screen_at, element_screen_center,
+    element_screen_rect, kAXErrorSuccess, AXUIElementPerformAction, AXUIElementRef,
 };
 use crate::ax::snapshot::RetainedElement;
 use crate::focus_guard;
@@ -1555,11 +1555,15 @@ async fn verified_hit_click(
         let target = element.as_ptr() as AXUIElementRef;
         checked_click(
             || super::bring_to_front::activate_exact_window_blocking(pid, wid),
-            // SAFETY: `element` holds a +1 reference on `target` for this closure.
-            || unsafe { element_screen_center(target) },
+            || {
+                // SAFETY: `element` holds a +1 reference on `target` for this closure.
+                let (x, y) = unsafe { element_screen_center(target) }?;
+                crate::input::mouse::warp_cursor_for_click(x, y);
+                Some((x, y))
+            },
             |(x, y)| hit_at(target, x, y),
             |(x, y)| {
-                crate::input::mouse::click_at_xy_desktop_with_modifiers(x, y, count, "left", &[])
+                crate::input::mouse::click_at_warped_xy_desktop(x, y, count)
                     .map_err(|e| e.to_string())
             },
         )
@@ -1593,14 +1597,14 @@ fn hit_at(target: AXUIElementRef, x: f64, y: f64) -> Hit {
         hit,
         MAX_HIT_DEPTH,
         // SAFETY: `n.0` is a live element its HitNode owns; the parent comes at +1.
-        |n| Ok::<_, ()>(unsafe { copy_element_attr(n.0, "AXParent") }.map(HitNode)),
+        |n| unsafe { copy_parent(n.0) }.map(|p| p.map(HitNode)),
         // SAFETY: both elements are live for the comparison.
         |n| Ok(unsafe { CFEqual(n.0 as CFTypeRef, target as CFTypeRef) } != 0),
     );
     match found {
         Ok(Some(_)) => Hit::Target,
         Ok(None) => Hit::Other,
-        Err(()) => Hit::Unavailable,
+        Err(_) => Hit::Unavailable,
     }
 }
 
