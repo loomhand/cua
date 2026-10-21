@@ -537,7 +537,7 @@ pub fn position_cursor_for_click(sx: i32, sy: i32) -> bool {
         if SendInput(&moved, std::mem::size_of::<INPUT>() as i32) != 1 {
             return false;
         }
-        sleep(Duration::from_millis(40));
+        sleep(Duration::from_millis(150));
         let mut at = POINT::default();
         GetCursorPos(&mut at).is_ok() && (at.x - sx).abs() <= 1 && (at.y - sy).abs() <= 1
     }
