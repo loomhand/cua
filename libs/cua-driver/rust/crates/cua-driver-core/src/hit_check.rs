@@ -181,7 +181,7 @@ mod tests {
     }
 
     fn code(result: &Result<(i32, i32), ToolResult>) -> serde_json::Value {
-        let refused = result.as_ref().err().expect("a refusal");
+        let refused = result.as_ref().expect_err("a refusal");
         refused
             .structured_content
             .as_ref()
