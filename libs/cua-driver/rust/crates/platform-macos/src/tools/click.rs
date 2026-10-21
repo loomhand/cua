@@ -1557,9 +1557,11 @@ async fn verified_hit_click(
             || super::bring_to_front::activate_exact_window_blocking(pid, wid),
             || {
                 // SAFETY: `element` holds a +1 reference on `target` for this closure.
-                let (x, y) = unsafe { element_screen_center(target) }?;
+                let Some((x, y)) = (unsafe { element_screen_center(target) }) else {
+                    return Ok(None);
+                };
                 crate::input::mouse::warp_cursor_for_click(x, y);
-                Some((x, y))
+                Ok(Some((x, y)))
             },
             |(x, y)| hit_at(target, x, y),
             |(x, y)| {

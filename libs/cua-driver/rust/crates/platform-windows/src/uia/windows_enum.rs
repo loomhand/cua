@@ -1303,28 +1303,33 @@ pub(crate) fn element_hit_at(
     .flatten()
 }
 
-/// The live centre of `target`'s bounding rectangle in screen pixels; `None`
-/// when it has no area or UI Automation could not answer in time.
-pub(crate) fn element_centre(target: crate::uia::snapshot::RetainedElement) -> Option<(i32, i32)> {
+/// The live centre of `target`'s bounding rectangle in screen pixels:
+/// `Ok(None)` when it has no area, `Err` when UI Automation could not read it
+/// in time.
+pub(crate) fn element_centre(
+    target: crate::uia::snapshot::RetainedElement,
+) -> Result<Option<(i32, i32)>, ()> {
     run_uia_with_deadline(
         "verify_hit centre",
         HIT_CHECK_TIMEOUT,
-        "a hit_mismatch refusal",
+        "a hit_check_unavailable refusal",
         move || {
             if !target.is_uia() {
-                return None;
+                return Err(());
             }
+            // Keep this first so COM interfaces drop before CoUninitialize.
+            let _com = ComInit::new();
             // The snapshot store keeps its own reference; this borrow is never released.
             let element = std::mem::ManuallyDrop::new(unsafe {
                 IUIAutomationElement::from_raw(target.as_ptr() as *mut _)
             });
-            let r = unsafe { element.CurrentBoundingRectangle() }.ok()?;
-            (r.right > r.left && r.bottom > r.top)
-                .then_some(((r.left + r.right) / 2, (r.top + r.bottom) / 2))
+            let r = unsafe { element.CurrentBoundingRectangle() }.map_err(|_| ())?;
+            Ok((r.right > r.left && r.bottom > r.top)
+                .then_some(((r.left + r.right) / 2, (r.top + r.bottom) / 2)))
         },
     )
-    .ok()
-    .flatten()
+    .map_err(|_| ())
+    .and_then(|centre| centre)
 }
 
 fn element_hit_at_unbounded(
