@@ -24,12 +24,13 @@ pub enum Hit {
     Unavailable,
 }
 
-/// Fronts the target's window, reads the target's centre, hit-tests there and
+/// Fronts the target's window, reads the target's centre (`Ok(None)` when it
+/// has none on the screen, `Err` when the read fails), hit-tests there and
 /// posts the click, back to back with nothing awaited between them; the point
 /// clicked, or the refusal when nothing was sent.
 pub fn checked_click<P: Copy + std::fmt::Debug>(
     front: impl FnOnce() -> bool,
-    centre: impl FnOnce() -> Option<P>,
+    centre: impl FnOnce() -> Result<Option<P>, ()>,
     hit: impl FnOnce(P) -> Hit,
     post: impl FnOnce(P) -> Result<(), String>,
 ) -> Result<P, ToolResult> {
@@ -40,11 +41,22 @@ pub fn checked_click<P: Copy + std::fmt::Debug>(
                 .to_owned(),
         ));
     }
-    let Some(at) = centre() else {
-        return Err(hit_refusal(
-            HIT_MISMATCH,
-            "click.verify_hit: the element has no on-screen centre; nothing was sent.".to_owned(),
-        ));
+    let at = match centre() {
+        Ok(Some(at)) => at,
+        Ok(None) => {
+            return Err(hit_refusal(
+                HIT_MISMATCH,
+                "click.verify_hit: the element has no on-screen centre; nothing was sent."
+                    .to_owned(),
+            ))
+        }
+        Err(()) => {
+            return Err(hit_refusal(
+                HIT_CHECK_UNAVAILABLE,
+                "click.verify_hit: reading the element's centre failed; nothing was sent."
+                    .to_owned(),
+            ))
+        }
     };
     match hit(at) {
         Hit::Target => {}
@@ -154,7 +166,7 @@ mod tests {
             },
             || {
                 steps.borrow_mut().push("centre");
-                Some((3, 4))
+                Ok(Some((3, 4)))
             },
             |_| {
                 steps.borrow_mut().push("hit");
@@ -209,6 +221,20 @@ mod tests {
     }
 
     #[test]
+    fn a_centre_that_is_gone_or_unreadable_sends_nothing_and_names_which() {
+        let posted = std::cell::Cell::new(false);
+        let post = |_: (i32, i32)| {
+            posted.set(true);
+            Ok(())
+        };
+        let gone = checked_click(|| true, || Ok(None), |_| Hit::Target, post);
+        assert_eq!(code(&gone), serde_json::json!(HIT_MISMATCH));
+        let unread = checked_click(|| true, || Err(()), |_| Hit::Target, post);
+        assert_eq!(code(&unread), serde_json::json!(HIT_CHECK_UNAVAILABLE));
+        assert!(!posted.get());
+    }
+
+    #[test]
     fn a_target_covered_while_the_cursor_glided_is_not_clicked() {
         let covered = std::cell::Cell::new(false);
         let glide = || covered.set(true);
@@ -216,7 +242,7 @@ mod tests {
         let posted = std::cell::Cell::new(false);
         let out = checked_click(
             || true,
-            || Some((3, 4)),
+            || Ok(Some((3, 4))),
             |_| {
                 if covered.get() {
                     Hit::Other
