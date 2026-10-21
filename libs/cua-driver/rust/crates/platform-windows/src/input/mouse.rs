@@ -516,6 +516,7 @@ pub fn send_click_synthesized_mods(
         button,
         modifiers,
         ClickMode::NonActivating,
+        false,
     )
 }
 
@@ -531,7 +532,16 @@ pub fn send_click_synthesized_active_mods(
     button: &str,
     modifiers: &[&str],
 ) -> Result<()> {
-    send_click_synthesized_mods_impl(target, sx, sy, count, button, modifiers, ClickMode::Window)
+    send_click_synthesized_mods_impl(
+        target,
+        sx,
+        sy,
+        count,
+        button,
+        modifiers,
+        ClickMode::Window,
+        false,
+    )
 }
 
 /// Explicit desktop clicks leave the hardware cursor at the requested point.
@@ -543,7 +553,16 @@ pub fn send_click_synthesized_desktop_mods(
     button: &str,
     modifiers: &[&str],
 ) -> Result<()> {
-    send_click_synthesized_mods_impl(target, sx, sy, count, button, modifiers, ClickMode::Desktop)
+    send_click_synthesized_mods_impl(
+        target,
+        sx,
+        sy,
+        count,
+        button,
+        modifiers,
+        ClickMode::Desktop,
+        false,
+    )
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -553,6 +572,26 @@ enum ClickMode {
     Desktop,
 }
 
+/// Move the cursor to a screen point and let hover state settle there, as a
+/// click does before its mouse-down.
+pub fn position_cursor_for_click(sx: i32, sy: i32) {
+    let _ = unsafe { SetCursorPos(sx, sy) };
+    sleep(Duration::from_millis(40));
+}
+
+/// SendInput left click at a point in a window the caller already brought to
+/// the front and moved the cursor to with [`position_cursor_for_click`], so
+/// nothing runs between the caller's last check and the mouse-down.
+pub fn send_click_synthesized_positioned(
+    target: u64,
+    sx: i32,
+    sy: i32,
+    count: usize,
+) -> Result<()> {
+    send_click_synthesized_mods_impl(target, sx, sy, count, "left", &[], ClickMode::Window, true)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn send_click_synthesized_mods_impl(
     target: u64,
     sx: i32,
@@ -561,6 +600,7 @@ fn send_click_synthesized_mods_impl(
     button: &str,
     modifiers: &[&str],
     mode: ClickMode,
+    positioned: bool,
 ) -> Result<()> {
     let activate = mode != ClickMode::NonActivating;
     let target = HWND(target as *mut _);
@@ -664,7 +704,7 @@ fn send_click_synthesized_mods_impl(
         // Capture whether the target was ALREADY always-on-top so we don't strip
         // that state on restore — only demote below if WE promoted it.
         let was_topmost = (GetWindowLongPtrW(target, GWL_EXSTYLE) as u32) & WS_EX_TOPMOST.0 != 0;
-        if activate && !crate::input::force_foreground_assisted(target).0 {
+        if activate && !positioned && !crate::input::force_foreground_assisted(target).0 {
             let actual = GetForegroundWindow();
             bail!(
                 "foreground_unavailable: Windows did not activate exact target HWND {:?} \
@@ -701,7 +741,9 @@ fn send_click_synthesized_mods_impl(
         // Move the cursor so the OS hover state matches before the click; the
         // MOUSEEVENTF_MOVE input ensures Chromium's input filter sees a
         // coordinated move event.
-        let _ = SetCursorPos(sx, sy);
+        if !positioned {
+            let _ = SetCursorPos(sx, sy);
+        }
 
         // Hold modifier keys (ctrl/shift/alt/win) across the click — the macOS
         // `modifier` surface. Pressed via the system input queue so apps that

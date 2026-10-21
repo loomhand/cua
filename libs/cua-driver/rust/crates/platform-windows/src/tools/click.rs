@@ -54,7 +54,10 @@ async fn verified_hit_click(
             }
             .0,
             || {
-                let Some((at, hit)) = crate::uia::windows_enum::element_centre_and_hit(element)?
+                let Some((at, hit)) = crate::uia::windows_enum::element_centre_and_hit(
+                    element,
+                    crate::input::position_cursor_for_click,
+                )?
                 else {
                     return Ok(None);
                 };
@@ -67,7 +70,7 @@ async fn verified_hit_click(
                 _ => Hit::Unavailable,
             },
             |(x, y)| {
-                crate::input::send_click_synthesized_active_mods(hwnd, x, y, count, "left", &[])
+                crate::input::send_click_synthesized_positioned(hwnd, x, y, count)
                     .map_err(|e| e.to_string())
             },
         )
