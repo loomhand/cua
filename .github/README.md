@@ -24,10 +24,12 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | Windows: a desktop click that closes its own target window succeeds | [#5412](https://github.com/trycua/cua/pull/5412) |
 | Windows: list_windows omits the driver's own overlay windows | [#5413](https://github.com/trycua/cua/pull/5413) |
 | macOS: capture the desktop with captureImage(in:) when there is no overlay to leave out | fork only |
-| Linux: restore the active window by bouncing the core focus when only the window manager's record moved (xfwm4 takes the session keyboard's focus as the desktop's) | fork only |
-| macOS: paint the cursor overlay as a tile around the cursors, not a full-screen frame | fork only |
-| macOS: skip the Space snapshot in the background gate and the window-change detector | fork only |
+| Linux: restore the active window by bouncing the core focus when only the window manager's record moved (xfwm4 takes the session keyboard's focus as the desktop's) | [#5642](https://github.com/trycua/cua/pull/5642) |
+| macOS: paint the cursor overlay as a tile around the cursors, not a full-screen frame | [#5640](https://github.com/trycua/cua/pull/5640) |
+| macOS: skip the Space snapshot in the background gate and the window-change detector | [#5641](https://github.com/trycua/cua/pull/5641) |
 | macOS and Windows: `click` with `verify_hit` fronts an element's window and posts a pixel click at its centre only when the hit test there finds the element | fork only |
+| macOS: background text to kitty goes in as an AXValue write, which kitty commits to its pty without a key window; a blank kitty read-back is unverified, not zero delivered | fork only |
+| macOS: find a window on another Space through the app's focused and main window before the remote-token probe, and note when an own-renderer app's off-Space pixels are stale | fork only |
 
 Before a box image moves its cua-driver pin to `dev`:
 
