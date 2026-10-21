@@ -132,8 +132,9 @@ fn verified_capture(
 /// Chromium stops painting and stops updating its accessibility tree while its
 /// window is not visible, which includes sitting on another Space (CUA-1351,
 /// cdb-v2-40: a click delivered off-Space only showed once the Space was shown).
-/// Other apps that draw with their own renderer stop painting too, but their
-/// accessibility tree stays current. AppKit windows keep drawing, so they get
+/// Other apps that draw with their own renderer stop painting too; their
+/// accessibility tree is the better signal but can lag as well (an Electron
+/// app throttles it like Chromium). AppKit windows keep drawing, so they get
 /// no note.
 fn off_space_staleness_note(
     on_current_space: Option<bool>,
@@ -152,10 +153,10 @@ fn off_space_staleness_note(
         );
     }
     own_renderer.then_some(
-        "This window is on another Space. This app draws with its own renderer and \
-         pauses painting while its window is not visible, so this screenshot can show \
-         an older state. The accessibility tree is read from the app and is current: \
-         confirm an action's effect from the tree, not from this screenshot.",
+        "This window is on another Space and its app pauses painting while hidden, so \
+         this screenshot can show an older state; the accessibility tree is the better \
+         signal but can lag too, so confirm an action's effect in a later read or after \
+         the window is shown.",
     )
 }
 
@@ -1589,7 +1590,7 @@ mod tests {
     #[test]
     fn an_off_space_own_renderer_window_gets_a_pixels_only_note() {
         let note = off_space_staleness_note(Some(false), false, true).unwrap();
-        assert!(note.contains("accessibility tree is read from the app and is current"));
+        assert!(note.contains("accessibility tree is the better signal but can lag too"));
         assert!(off_space_staleness_note(Some(true), false, true).is_none());
         assert!(off_space_staleness_note(Some(false), true, true)
             .unwrap()
