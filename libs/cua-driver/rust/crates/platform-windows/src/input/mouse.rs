@@ -526,16 +526,26 @@ pub fn send_click_synthesized_active_mods(
     send_click_synthesized_mods_impl(target, sx, sy, count, button, modifiers, true, false)
 }
 
-/// Move the cursor to a screen point and let hover state settle there, as a
-/// click does before its mouse-down.
-pub fn position_cursor_for_click(sx: i32, sy: i32) {
-    let _ = unsafe { SetCursorPos(sx, sy) };
-    sleep(Duration::from_millis(40));
+/// Move the cursor to a screen point with the absolute move a click sends and
+/// let hover state settle there; false when the cursor did not get there.
+pub fn position_cursor_for_click(sx: i32, sy: i32) -> bool {
+    unsafe {
+        if SetCursorPos(sx, sy).is_err() {
+            return false;
+        }
+        let moved = [absolute_move(sx, sy)];
+        if SendInput(&moved, std::mem::size_of::<INPUT>() as i32) != 1 {
+            return false;
+        }
+        sleep(Duration::from_millis(40));
+        let mut at = POINT::default();
+        GetCursorPos(&mut at).is_ok() && (at.x - sx).abs() <= 1 && (at.y - sy).abs() <= 1
+    }
 }
 
-/// SendInput left click at a point in a window the caller already brought to
+/// SendInput button-only left click in a window the caller already brought to
 /// the front and moved the cursor to with [`position_cursor_for_click`], so
-/// nothing runs between the caller's last check and the mouse-down.
+/// nothing moves between the caller's last check and the mouse-down.
 pub fn send_click_synthesized_positioned(
     target: u64,
     sx: i32,
@@ -573,44 +583,7 @@ fn send_click_synthesized_mods_impl(
         _ => (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
     };
 
-    // Convert screen pixel coords to normalized absolute coords spanning the
-    // virtual desktop (0..65535 across the union of all monitors). This is
-    // what `MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK` expects.
-    //
-    // Without VIRTUALDESK the coords are relative to the primary monitor only;
-    // multi-monitor setups would misroute. Better to always use VIRTUALDESK.
-    //
-    // Math lives in `crate::virtualdesk` so it can be unit-tested cross-platform
-    // (no Win32 runtime required) — see issue #1979 for the negative-offset
-    // multi-monitor case the tests there pin down.
-    let (vd_x, vd_y) = unsafe {
-        (
-            GetSystemMetrics(SM_XVIRTUALSCREEN),
-            GetSystemMetrics(SM_YVIRTUALSCREEN),
-        )
-    };
-    let (vd_w, vd_h) = unsafe {
-        (
-            GetSystemMetrics(SM_CXVIRTUALSCREEN).max(1),
-            GetSystemMetrics(SM_CYVIRTUALSCREEN).max(1),
-        )
-    };
-    let (norm_x, norm_y) =
-        crate::virtualdesk::to_virtualdesk_absolute(sx, sy, vd_x, vd_y, vd_w, vd_h);
-
-    let move_input = INPUT {
-        r#type: INPUT_MOUSE,
-        Anonymous: INPUT_0 {
-            mi: MOUSEINPUT {
-                dx: norm_x,
-                dy: norm_y,
-                mouseData: 0,
-                dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
-                time: 0,
-                dwExtraInfo: 0,
-            },
-        },
-    };
+    let move_input = absolute_move(sx, sy);
     let down_input = INPUT {
         r#type: INPUT_MOUSE,
         Anonymous: INPUT_0 {
@@ -718,8 +691,9 @@ fn send_click_synthesized_mods_impl(
             // Only the move record carries absolute coordinates. Button-only
             // records act at the current pointer position; adding ABSOLUTE to
             // them can prevent retained-mode controls from seeing the press.
-            let events = [move_input, down_input, up_input];
-            let sent = SendInput(&events, std::mem::size_of::<INPUT>() as i32);
+            let all = [move_input, down_input, up_input];
+            let events = if positioned { &all[1..] } else { &all[..] };
+            let sent = SendInput(events, std::mem::size_of::<INPUT>() as i32);
             if sent as usize != events.len() {
                 sent_ok = false;
                 break;
@@ -795,6 +769,46 @@ fn send_click_synthesized_mods_impl(
     }
 
     Ok(())
+}
+
+fn absolute_move(sx: i32, sy: i32) -> INPUT {
+    // Convert screen pixel coords to normalized absolute coords spanning the
+    // virtual desktop (0..65535 across the union of all monitors). This is
+    // what `MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK` expects.
+    //
+    // Without VIRTUALDESK the coords are relative to the primary monitor only;
+    // multi-monitor setups would misroute. Better to always use VIRTUALDESK.
+    //
+    // Math lives in `crate::virtualdesk` so it can be unit-tested cross-platform
+    // (no Win32 runtime required) — see issue #1979 for the negative-offset
+    // multi-monitor case the tests there pin down.
+    let (vd_x, vd_y) = unsafe {
+        (
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+        )
+    };
+    let (vd_w, vd_h) = unsafe {
+        (
+            GetSystemMetrics(SM_CXVIRTUALSCREEN).max(1),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN).max(1),
+        )
+    };
+    let (norm_x, norm_y) =
+        crate::virtualdesk::to_virtualdesk_absolute(sx, sy, vd_x, vd_y, vd_w, vd_h);
+    INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: norm_x,
+                dy: norm_y,
+                mouseData: 0,
+                dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
 }
 
 /// Press-hold-move-release drag via `SendInput`, used by the `drag` tool's
