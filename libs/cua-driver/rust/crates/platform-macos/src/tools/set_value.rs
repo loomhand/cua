@@ -784,10 +784,18 @@ fn set_value_blocking(
                     }
                 }
             }
+            // kitty exposes no text while it is not focused, yet commits the
+            // write to its pty: a blank read-back there proves nothing.
+            let blank_terminal = crate::terminal::is_terminal_pid(pid)
+                && crate::terminal::read_back_is_blank(before.as_deref(), after.as_deref());
+            (verified, changed) = honest_verdict(verified, changed, blank_terminal);
             let suffix = match (verified, changed) {
                 (Some(true), Some(false)) => " Value already matched; write was idempotent.",
                 (Some(true), _) => "",
                 (Some(false), _) => " Read-back did not confirm the value; verify via screenshot.",
+                (None, _) if blank_terminal => {
+                    " The terminal shows no text through AX here; could not confirm."
+                }
                 (None, _) => " Value is not readable through AX; could not confirm.",
             };
             // An AX write bypasses NSTextView's edit model, so a document is
@@ -911,6 +919,19 @@ fn watch_field_settle(
 
 /// How often [`watch_field_settle`] re-reads the field.
 const FIELD_POLL: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// A blank terminal read-back neither confirms nor denies the write.
+fn honest_verdict(
+    verified: Option<bool>,
+    changed: Option<bool>,
+    blank_terminal: bool,
+) -> (Option<bool>, Option<bool>) {
+    if blank_terminal {
+        (None, None)
+    } else {
+        (verified, changed)
+    }
+}
 
 /// Re-reads (100 ms apart) before an unchanged value counts as not applied.
 const NOT_APPLIED_REREADS: usize = 3;
@@ -1609,9 +1630,9 @@ fn hex_digit(n: u8) -> char {
 mod tests {
     use super::{
         apply_surface_trust, apply_verification_label, calc_cell_record, classify_write,
-        file_name_needs_rename, is_file_name_cell, is_get_info_name_field, not_applied_result,
-        write_not_applied, FieldSettle, SetValueOutcome, FIELD_QUIET, GET_INFO_RENAME_ROUTE,
-        LIST_RENAME_ROUTE,
+        file_name_needs_rename, honest_verdict, is_file_name_cell, is_get_info_name_field,
+        not_applied_result, write_not_applied, FieldSettle, SetValueOutcome, FIELD_QUIET,
+        GET_INFO_RENAME_ROUTE, LIST_RENAME_ROUTE,
     };
     use std::time::Duration;
 
@@ -1743,6 +1764,22 @@ mod tests {
         ] {
             assert!(reason.contains(needed), "missing {needed:?}: {reason}");
         }
+    }
+
+    /// kitty applied the write but shows no text while unfocused: the blank
+    /// read-back is unverifiable, not a write the app refused.
+    #[test]
+    fn a_blank_terminal_read_back_is_unverifiable_not_unapplied() {
+        let (verified, changed) = classify_write(Some(""), Some(""), "ax-test", false);
+        assert!(write_not_applied(verified, changed));
+        let (verified, changed) = honest_verdict(verified, changed, true);
+        assert_eq!((verified, changed), (None, None));
+        assert!(!write_not_applied(verified, changed));
+        let (verified, changed) = classify_write(Some(""), Some(""), "x", false);
+        assert_eq!(
+            honest_verdict(verified, changed, false),
+            (verified, changed)
+        );
     }
 
     #[test]
