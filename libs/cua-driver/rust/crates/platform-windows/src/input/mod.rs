@@ -25,9 +25,9 @@ pub use keyboard::{
     send_text_synthesized_after_focus, wait_for_focused_descendant,
 };
 pub use mouse::{
-    has_chromium_descendant, is_chromium_target_window, post_click, post_click_screen,
-    send_click_synthesized, send_click_synthesized_active_mods, send_click_synthesized_mods,
-    send_wheel_synthesized,
+    has_chromium_descendant, is_chromium_target_window, position_cursor_for_click, post_click,
+    post_click_screen, send_click_synthesized, send_click_synthesized_active_mods,
+    send_click_synthesized_mods, send_click_synthesized_positioned, send_wheel_synthesized,
 };
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
