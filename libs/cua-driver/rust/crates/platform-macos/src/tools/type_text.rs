@@ -1860,13 +1860,13 @@ fn ax_value_write_refused(err: crate::ax::bindings::AXError) -> bool {
         kAXErrorAPIDisabled, kAXErrorAttributeUnsupported, kAXErrorIllegalArgument,
         kAXErrorInvalidUIElement,
     };
-    matches!(
-        err,
-        kAXErrorAttributeUnsupported
-            | kAXErrorIllegalArgument
-            | kAXErrorInvalidUIElement
-            | kAXErrorAPIDisabled
-    )
+    [
+        kAXErrorAttributeUnsupported,
+        kAXErrorIllegalArgument,
+        kAXErrorInvalidUIElement,
+        kAXErrorAPIDisabled,
+    ]
+    .contains(&err)
 }
 
 /// kitty's `AXValue` is the text around its cursor, and only while kitty is
