@@ -750,8 +750,11 @@ fn set_value_blocking(
             }
             // kitty exposes no text while it is not focused, yet commits the
             // write to its pty: a blank read-back there proves nothing.
-            let blank_terminal = crate::terminal::is_terminal_pid(pid)
-                && crate::terminal::read_back_is_blank(before.as_deref(), after.as_deref());
+            let blank_terminal = blank_ax_value_terminal(
+                &crate::apps::bundle_id_for_pid(pid).unwrap_or_default(),
+                before.as_deref(),
+                after.as_deref(),
+            );
             (verified, changed) = honest_verdict(verified, changed, blank_terminal);
             let suffix = match (verified, changed) {
                 (Some(true), Some(false)) => " Value already matched; write was idempotent.",
@@ -878,6 +881,14 @@ fn watch_field_settle(
 
 /// How often [`watch_field_settle`] re-reads the field.
 const FIELD_POLL: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// A terminal that commits `AXValue` writes to its pty (kitty) reads blank
+/// while unfocused, so a blank read-back there proves nothing. Terminal.app
+/// and iTerm2 drop such writes: their blank read-back stays not applied.
+fn blank_ax_value_terminal(bundle_id: &str, before: Option<&str>, after: Option<&str>) -> bool {
+    crate::terminal::commits_ax_value(bundle_id)
+        && crate::terminal::read_back_is_blank(before, after)
+}
 
 /// A blank terminal read-back neither confirms nor denies the write.
 fn honest_verdict(
@@ -1588,10 +1599,10 @@ fn hex_digit(n: u8) -> char {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_surface_trust, apply_verification_label, calc_cell_record, classify_write,
-        file_name_needs_rename, honest_verdict, is_file_name_cell, is_get_info_name_field,
-        not_applied_result, write_not_applied, FieldSettle, SetValueOutcome, FIELD_QUIET,
-        GET_INFO_RENAME_ROUTE, LIST_RENAME_ROUTE,
+        apply_surface_trust, apply_verification_label, blank_ax_value_terminal, calc_cell_record,
+        classify_write, file_name_needs_rename, honest_verdict, is_file_name_cell,
+        is_get_info_name_field, not_applied_result, write_not_applied, FieldSettle,
+        SetValueOutcome, FIELD_QUIET, GET_INFO_RENAME_ROUTE, LIST_RENAME_ROUTE,
     };
     use std::time::Duration;
 
@@ -1739,6 +1750,28 @@ mod tests {
             honest_verdict(verified, changed, false),
             (verified, changed)
         );
+    }
+
+    /// Only a terminal that commits AXValue writes gets the blank pass:
+    /// Terminal.app and iTerm2 drop the write, so theirs stays not applied.
+    #[test]
+    fn a_blank_read_back_stays_not_applied_outside_kitty() {
+        assert!(blank_ax_value_terminal(
+            "net.kovidgoyal.kitty",
+            Some(""),
+            Some("")
+        ));
+        for bundle in [
+            "com.apple.Terminal",
+            "com.googlecode.iterm2",
+            "com.apple.TextEdit",
+        ] {
+            let blank = blank_ax_value_terminal(bundle, Some(""), Some(""));
+            assert!(!blank, "{bundle}");
+            let (verified, changed) = classify_write(Some(""), Some(""), "ls", false);
+            let (verified, changed) = honest_verdict(verified, changed, blank);
+            assert!(write_not_applied(verified, changed), "{bundle}");
+        }
     }
 
     #[test]
