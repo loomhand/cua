@@ -222,7 +222,6 @@ fn minimized_element_refusal(
 async fn verified_hit_click(
     admitted: &Option<crate::uia::snapshot::RetainedElement>,
     hwnd: u64,
-    pid: u32,
     idx: usize,
     count: usize,
     cursor_key: &str,
@@ -245,8 +244,8 @@ async fn verified_hit_click(
     ) {
         return refusal;
     }
-    let live = element.clone();
     let sent = tokio::task::spawn_blocking(move || {
+        let found = std::cell::Cell::new(None);
         checked_click(
             || unsafe {
                 crate::input::force_foreground_assisted(windows::Win32::Foundation::HWND(
@@ -254,11 +253,18 @@ async fn verified_hit_click(
                 ))
             }
             .0,
-            || crate::uia::windows_enum::element_centre(live),
-            |(x, y)| match crate::uia::windows_enum::element_hit_at(element, x, y) {
-                Some(true) => Hit::Target,
-                Some(false) => Hit::Other,
-                None => Hit::Unavailable,
+            || {
+                let Some((at, hit)) = crate::uia::windows_enum::element_centre_and_hit(element)?
+                else {
+                    return Ok(None);
+                };
+                found.set(Some(hit));
+                Ok(Some(at))
+            },
+            |_| match found.get() {
+                Some(Some(true)) => Hit::Target,
+                Some(Some(false)) => Hit::Other,
+                _ => Hit::Unavailable,
             },
             |(x, y)| {
                 crate::input::send_click_synthesized_active_mods(hwnd, x, y, count, "left", &[])
@@ -3743,7 +3749,7 @@ impl Tool for ClickTool {
         };
 
         if let Some(idx) = elem_idx.filter(|_| verify_hit) {
-            return verified_hit_click(&admitted, hwnd, pid, idx, count, &cursor_key).await;
+            return verified_hit_click(&admitted, hwnd, idx, count, &cursor_key).await;
         }
 
         if let Some(idx) = elem_idx {
