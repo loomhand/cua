@@ -2065,7 +2065,8 @@ mod tests {
     fn kitty_text_falls_back_to_keys_only_after_a_refused_ax_write() {
         use super::{kitty_delivery, KittyDelivery};
         use crate::ax::bindings::{
-            kAXErrorAttributeUnsupported, kAXErrorFailure, kAXErrorIllegalArgument, kAXErrorSuccess,
+            kAXErrorAPIDisabled, kAXErrorAttributeUnsupported, kAXErrorFailure,
+            kAXErrorIllegalArgument, kAXErrorInvalidUIElement, kAXErrorSuccess,
         };
         const CANNOT_COMPLETE: crate::ax::bindings::AXError = -25204;
         for err in [kAXErrorSuccess, CANNOT_COMPLETE, kAXErrorFailure] {
@@ -2077,7 +2078,12 @@ mod tests {
             assert!(!outcome.verified);
             assert_eq!(outcome.delivered_chars, None);
         }
-        for err in [kAXErrorAttributeUnsupported, kAXErrorIllegalArgument] {
+        for err in [
+            kAXErrorAttributeUnsupported,
+            kAXErrorIllegalArgument,
+            kAXErrorInvalidUIElement,
+            kAXErrorAPIDisabled,
+        ] {
             let view = fake(err);
             assert!(matches!(
                 kitty_delivery(Some(&view), "git status"),
