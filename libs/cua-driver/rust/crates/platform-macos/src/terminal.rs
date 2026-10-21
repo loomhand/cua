@@ -62,7 +62,12 @@ pub fn is_terminal_pid(pid: i32) -> bool {
 /// `AXValue` write. Control characters stay key presses: the pty would get a
 /// committed `\r` or `\n` as Enter and a `\t` as completion.
 pub fn takes_ax_value_input(bundle_id: &str, text: &str) -> bool {
-    AX_VALUE_INPUT_BUNDLE_IDS.contains(&bundle_id) && !text.chars().any(char::is_control)
+    commits_ax_value(bundle_id) && !text.chars().any(char::is_control)
+}
+
+/// Whether the app with `bundle_id` commits an `AXValue` write to its pty.
+pub fn commits_ax_value(bundle_id: &str) -> bool {
+    AX_VALUE_INPUT_BUNDLE_IDS.contains(&bundle_id)
 }
 
 /// Whether a terminal's text read-back proves nothing: empty or unreadable
