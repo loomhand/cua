@@ -1274,11 +1274,11 @@ pub(crate) fn point_shape_chain(sx: i32, sy: i32) -> Option<PointShapeChain> {
 /// one UI Automation call, so no other provider call takes the single-flight
 /// gate between them:
 /// `Ok(None)` when the element has no area; else the centre and whether the
-/// element on top there is `target` or inside it (`None` when the hit test
-/// failed); `Err` when the centre could not be read in time.
+/// element on top there is `target` or inside it (`None` when `at_centre` or
+/// the hit test failed); `Err` when the centre could not be read in time.
 pub(crate) fn element_centre_and_hit(
     target: crate::uia::snapshot::RetainedElement,
-    at_centre: impl FnOnce(i32, i32) + Send + 'static,
+    at_centre: impl FnOnce(i32, i32) -> bool + Send + 'static,
 ) -> Result<Option<((i32, i32), Option<bool>)>, ()> {
     run_uia_with_deadline(
         "verify_hit",
@@ -1299,7 +1299,9 @@ pub(crate) fn element_centre_and_hit(
                 return Ok(None);
             }
             let at = ((r.left + r.right) / 2, (r.top + r.bottom) / 2);
-            at_centre(at.0, at.1);
+            if !at_centre(at.0, at.1) {
+                return Ok(Some((at, None)));
+            }
             Ok(Some((at, element_hit_at_unbounded(&target, at.0, at.1))))
         },
     )
