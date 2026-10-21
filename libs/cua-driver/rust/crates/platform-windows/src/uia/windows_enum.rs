@@ -1270,31 +1270,16 @@ pub(crate) fn point_shape_chain(sx: i32, sy: i32) -> Option<PointShapeChain> {
     .flatten()
 }
 
-/// Whether the element on top at screen point `(sx, sy)` is `target` or inside
-/// it; `None` when UI Automation could not answer in time.
-pub(crate) fn element_hit_at(
+/// Reads `target`'s live centre and hit-tests there in one UI Automation call,
+/// so no other provider call takes the single-flight gate between them:
+/// `Ok(None)` when the element has no area; else the centre and whether the
+/// element on top there is `target` or inside it (`None` when the hit test
+/// failed); `Err` when the centre could not be read in time.
+pub(crate) fn element_centre_and_hit(
     target: crate::uia::snapshot::RetainedElement,
-    sx: i32,
-    sy: i32,
-) -> Option<bool> {
+) -> Result<Option<((i32, i32), Option<bool>)>, ()> {
     run_uia_with_deadline(
         "verify_hit",
-        HIT_CHECK_TIMEOUT,
-        "a hit_mismatch refusal",
-        move || element_hit_at_unbounded(&target, sx, sy),
-    )
-    .ok()
-    .flatten()
-}
-
-/// The live centre of `target`'s bounding rectangle in screen pixels:
-/// `Ok(None)` when it has no area, `Err` when UI Automation could not read it
-/// in time.
-pub(crate) fn element_centre(
-    target: crate::uia::snapshot::RetainedElement,
-) -> Result<Option<(i32, i32)>, ()> {
-    run_uia_with_deadline(
-        "verify_hit centre",
         HIT_CHECK_TIMEOUT,
         "a hit_check_unavailable refusal",
         move || {
@@ -1308,8 +1293,11 @@ pub(crate) fn element_centre(
                 IUIAutomationElement::from_raw(target.as_ptr() as *mut _)
             });
             let r = unsafe { element.CurrentBoundingRectangle() }.map_err(|_| ())?;
-            Ok((r.right > r.left && r.bottom > r.top)
-                .then_some(((r.left + r.right) / 2, (r.top + r.bottom) / 2)))
+            if r.right <= r.left || r.bottom <= r.top {
+                return Ok(None);
+            }
+            let at = ((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+            Ok(Some((at, element_hit_at_unbounded(&target, at.0, at.1))))
         },
     )
     .map_err(|_| ())
