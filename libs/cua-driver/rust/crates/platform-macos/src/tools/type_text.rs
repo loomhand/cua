@@ -1558,7 +1558,8 @@ fn type_text_in_key_window(
 
     // --- Background rung 0: kitty takes the text as an AXValue write. ---
     if ax_value_input {
-        if let Some(outcome) = kitty_ax_value_insert(pid, text, element_ptr_and_idx, window_id) {
+        let view = unsafe { kitty_text_view(pid, element_ptr_and_idx, window_id) };
+        if let KittyDelivery::Ax(outcome) = kitty_delivery(view.as_ref(), text) {
             return Ok(TypeTextDelivery::Typed(outcome));
         }
         if let Some(refusal) = terminal_key_refusal(&keyboard_policy, text, delay_ms) {
@@ -1785,39 +1786,87 @@ fn honest_terminal_count(
     }
 }
 
-/// Background text for kitty: an `AXValue` write on its text view, which
-/// kitty commits to the pty as typed text with no key window. `None` when
-/// the window has no text view or the write is rejected.
-fn kitty_ax_value_insert(
-    pid: i32,
-    text: &str,
-    element_ptr_and_idx: Option<(usize, Option<usize>)>,
-    window_id: Option<u32>,
-) -> Option<TypeTextOutcome> {
-    let (element, owns) = unsafe { kitty_text_view(pid, element_ptr_and_idx, window_id) }?;
-    let before = unsafe { copy_string_attr(element, "AXValue") };
-    let err = unsafe { set_string_attr(element, "AXValue", text) };
-    let mut landed = false;
-    if err == kAXErrorSuccess {
-        let deadline = std::time::Instant::now() + AX_VALUE_ECHO_TIMEOUT;
-        loop {
-            let after = unsafe { copy_string_attr(element, "AXValue") };
-            landed = ax_value_insert_landed(before.as_deref(), after.as_deref(), text);
-            if landed || std::time::Instant::now() >= deadline {
-                break;
-            }
-            std::thread::sleep(DELIVERY_DRAIN_POLL_INTERVAL);
+/// The text view an `AXValue` insert writes to.
+trait AxTextView {
+    fn value(&self) -> Option<String>;
+    fn set_value(&self, text: &str) -> crate::ax::bindings::AXError;
+}
+
+/// A retained (or borrowed) AX element, released on drop when owned.
+struct AxElement {
+    element: AXUIElementRef,
+    owns: bool,
+}
+
+impl AxTextView for AxElement {
+    fn value(&self) -> Option<String> {
+        unsafe { copy_string_attr(self.element, "AXValue") }
+    }
+
+    fn set_value(&self, text: &str) -> crate::ax::bindings::AXError {
+        unsafe { set_string_attr(self.element, "AXValue", text) }
+    }
+}
+
+impl Drop for AxElement {
+    fn drop(&mut self) {
+        if self.owns {
+            unsafe { CFRelease(self.element as _) };
         }
     }
-    if owns {
-        unsafe { CFRelease(element as _) };
+}
+
+/// How background text for kitty goes in.
+enum KittyDelivery {
+    /// The `AXValue` write was sent, or may have been: never follow it with
+    /// keys, which would type the text twice.
+    Ax(TypeTextOutcome),
+    /// No text view, or AX refused the write before kitty could apply it.
+    Keys,
+}
+
+/// Background text for kitty: an `AXValue` write on its text view, which
+/// kitty commits to the pty as typed text with no key window. Only a write
+/// AX refused outright falls back to keys; an error that could follow an
+/// applied write (a messaging timeout) reports the text as unverified.
+fn kitty_delivery(view: Option<&impl AxTextView>, text: &str) -> KittyDelivery {
+    let Some(view) = view else {
+        return KittyDelivery::Keys;
+    };
+    let before = view.value();
+    let err = view.set_value(text);
+    if ax_value_write_refused(err) {
+        return KittyDelivery::Keys;
     }
-    (err == kAXErrorSuccess).then(|| TypeTextOutcome {
+    let deadline = std::time::Instant::now() + AX_VALUE_ECHO_TIMEOUT;
+    let landed = loop {
+        let landed = ax_value_insert_landed(before.as_deref(), view.value().as_deref(), text);
+        if landed || std::time::Instant::now() >= deadline {
+            break landed;
+        }
+        std::thread::sleep(DELIVERY_DRAIN_POLL_INTERVAL);
+    };
+    KittyDelivery::Ax(TypeTextOutcome {
         detail: " via AXValue (kitty commits it to the terminal as typed text)".to_string(),
         path: PATH_AX,
         verified: landed,
         delivered_chars: landed.then(|| text.chars().count()),
     })
+}
+
+/// Whether AX refused an attribute write before the app could apply it.
+fn ax_value_write_refused(err: crate::ax::bindings::AXError) -> bool {
+    use crate::ax::bindings::{
+        kAXErrorAPIDisabled, kAXErrorAttributeUnsupported, kAXErrorIllegalArgument,
+        kAXErrorInvalidUIElement,
+    };
+    matches!(
+        err,
+        kAXErrorAttributeUnsupported
+            | kAXErrorIllegalArgument
+            | kAXErrorInvalidUIElement
+            | kAXErrorAPIDisabled
+    )
 }
 
 /// kitty's `AXValue` is the text around its cursor, and only while kitty is
@@ -1828,29 +1877,35 @@ fn ax_value_insert_landed(before: Option<&str>, after: Option<&str>, text: &str)
 
 /// kitty's text view in `window_id`: the addressed element, the window's
 /// focused element, else the window's first `AXTextArea`, since kitty reports
-/// no focused element while it is not active. The flag says the caller must
-/// release the element.
+/// no focused element while it is not active.
 unsafe fn kitty_text_view(
     pid: i32,
     element_ptr_and_idx: Option<(usize, Option<usize>)>,
     window_id: Option<u32>,
-) -> Option<(AXUIElementRef, bool)> {
+) -> Option<AxElement> {
     use crate::ax::bindings::{
         ax_get_window_id, copy_ax_windows_including, copy_children, AXUIElementCreateApplication,
     };
 
+    let owned = |element| AxElement {
+        element,
+        owns: true,
+    };
     if let Some((ptr, _)) = element_ptr_and_idx {
-        return Some((ptr as AXUIElementRef, false));
+        return Some(AxElement {
+            element: ptr as AXUIElementRef,
+            owns: false,
+        });
     }
     let Some(window_id) = window_id else {
-        return focused_element_of_pid(pid).map(|element| (element, true));
+        return focused_element_of_pid(pid).map(owned);
     };
     let is_text_area = |element: AXUIElementRef| {
         copy_string_attr(element, "AXRole").as_deref() == Some("AXTextArea")
     };
     if let Some(element) = crate::ax::exact_target::focused_element_in_window(pid, window_id) {
         if is_text_area(element) {
-            return Some((element, true));
+            return Some(owned(element));
         }
         CFRelease(element as _);
     }
@@ -1873,7 +1928,7 @@ unsafe fn kitty_text_view(
         }
         CFRelease(window as _);
     }
-    found.map(|element| (element, true))
+    found.map(owned)
 }
 
 unsafe fn focused_accepts_text(element: AXUIElementRef) -> bool {
@@ -1976,6 +2031,63 @@ mod tests {
             Some(3)
         );
         assert_eq!(honest_terminal_count(None, Some(""), Some("")), None);
+    }
+
+    /// A kitty text view whose `AXValue` writes return `err` and leave the
+    /// value blank, as an unfocused kitty reads.
+    struct FakeView {
+        err: crate::ax::bindings::AXError,
+        writes: std::cell::Cell<usize>,
+    }
+
+    impl super::AxTextView for FakeView {
+        fn value(&self) -> Option<String> {
+            Some(String::new())
+        }
+
+        fn set_value(&self, _: &str) -> crate::ax::bindings::AXError {
+            self.writes.set(self.writes.get() + 1);
+            self.err
+        }
+    }
+
+    fn fake(err: crate::ax::bindings::AXError) -> FakeView {
+        FakeView {
+            err,
+            writes: Default::default(),
+        }
+    }
+
+    /// Keys follow the AXValue write only when AX refused it outright: after
+    /// an indeterminate error, or a write kitty took while unfocused, keys
+    /// could type the text a second time.
+    #[test]
+    fn kitty_text_falls_back_to_keys_only_after_a_refused_ax_write() {
+        use super::{kitty_delivery, KittyDelivery};
+        use crate::ax::bindings::{
+            kAXErrorAttributeUnsupported, kAXErrorFailure, kAXErrorIllegalArgument, kAXErrorSuccess,
+        };
+        const CANNOT_COMPLETE: crate::ax::bindings::AXError = -25204;
+        for err in [kAXErrorSuccess, CANNOT_COMPLETE, kAXErrorFailure] {
+            let view = fake(err);
+            let KittyDelivery::Ax(outcome) = kitty_delivery(Some(&view), "git status") else {
+                panic!("error {err} fell back to keys");
+            };
+            assert_eq!(view.writes.get(), 1);
+            assert!(!outcome.verified);
+            assert_eq!(outcome.delivered_chars, None);
+        }
+        for err in [kAXErrorAttributeUnsupported, kAXErrorIllegalArgument] {
+            let view = fake(err);
+            assert!(matches!(
+                kitty_delivery(Some(&view), "git status"),
+                KittyDelivery::Keys
+            ));
+        }
+        assert!(matches!(
+            kitty_delivery(None::<&FakeView>, "git status"),
+            KittyDelivery::Keys
+        ));
     }
 
     #[test]
