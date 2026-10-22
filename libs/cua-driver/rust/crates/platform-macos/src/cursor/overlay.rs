@@ -1744,7 +1744,7 @@ mod tests {
                             },
                         );
                         let frame = Some(ScreenFrame::new(0.0, 0.0, 400.0, 300.0));
-                        assert!(map.seed_start_if_sentinel("sessA", x, y, frame));
+                        assert!(map.seed_start_if_unplaced("sessA", x, y, frame));
                         let cursor = map.cursors.get_mut("sessA").unwrap();
                         if let Some(label) = label {
                             cursor.core.badge_mode_override =
