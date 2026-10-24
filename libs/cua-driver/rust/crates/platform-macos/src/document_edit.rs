@@ -14,6 +14,9 @@
 //! stays false for autosave-in-place documents even after a typed edit (VM
 //! check, TextEdit, 11 Oct 2026); TextEdit's autosave writing the new text is
 //! the evidence.
+//!
+//! A single-line native field outside web content gets the same edit when the
+//! keys reach its window, so search-as-you-type fields run their search.
 
 use std::time::Duration;
 
@@ -31,6 +34,8 @@ pub enum DocumentEdited {
     /// The key edit could not be sent to this window, or the text moved. A
     /// save may keep the old content.
     NotMarked,
+    /// The net-zero key edit changed a single-line field's text.
+    FieldMoved,
 }
 
 impl DocumentEdited {
@@ -47,13 +52,18 @@ impl DocumentEdited {
                  the old content. Type the text with key events instead (click the field, then \
                  type_text), or edit it in the foreground."
             }
+            DocumentEdited::FieldMoved => {
+                " Warning: a net-zero key edit (space, backspace) sent so the field runs its \
+                 change handlers changed its text, for example by accepting an inline \
+                 completion; read the field back before submitting."
+            }
         }
     }
 
     /// The structured value, `None` when the element is not in a document.
     pub fn structured(self) -> Option<bool> {
         match self {
-            DocumentEdited::NotADocument => None,
+            DocumentEdited::NotADocument | DocumentEdited::FieldMoved => None,
             DocumentEdited::NotMarked => Some(false),
             DocumentEdited::Marked => Some(true),
         }
@@ -86,6 +96,11 @@ unsafe fn in_document_window(element: AXUIElementRef) -> bool {
     document.is_some_and(|url| !url.is_empty())
 }
 
+/// Whether `role` is a single-line native text field.
+fn is_single_line_field(role: &str) -> bool {
+    matches!(role, "AXTextField" | "AXComboBox" | "AXSearchField")
+}
+
 /// Whether the app's key window (its `AXFocusedWindow`) is the element's
 /// window, so pid-routed key events reach this text and not another window.
 ///
@@ -101,7 +116,8 @@ unsafe fn keys_reach_element_window(pid: i32, element: AXUIElementRef) -> bool {
 }
 
 /// After an AX text write on `element` (in `pid`) that changed its value, make
-/// sure its document is marked edited. See the module docs.
+/// sure its document is marked edited, or that a single-line field outside
+/// web content (`in_web_area` answers false) sees the change. See the module docs.
 ///
 /// # Safety
 /// `element` must be a live `AXUIElementRef` for the duration of the call.
@@ -112,12 +128,21 @@ pub unsafe fn ensure_marked_after_ax_write(
     pid: i32,
     element: AXUIElementRef,
     caret_to_end: bool,
+    in_web_area: impl FnOnce() -> bool,
 ) -> DocumentEdited {
     if !in_document_window(element) {
+        let role = copy_string_attr(element, "AXRole").unwrap_or_default();
+        if is_single_line_field(&role)
+            && keys_reach_element_window(pid, element)
+            && !in_web_area()
+            && send_net_zero_edit(pid, element, caret_to_end) == Some(false)
+        {
+            return DocumentEdited::FieldMoved;
+        }
         return DocumentEdited::NotADocument;
     }
     if keys_reach_element_window(pid, element) {
-        return send_net_zero_edit(pid, element, caret_to_end);
+        return marked(send_net_zero_edit(pid, element, caret_to_end));
     }
     // With several windows open, the app's key window is another document,
     // and pid-routed keys go there. Make this window key inside the app
@@ -152,8 +177,7 @@ pub unsafe fn ensure_marked_after_ax_write(
     if let Some(previous) = previous {
         crate::input::skylight::activate_without_raise_with(pid, previous, false);
     }
-    if sent == DocumentEdited::Marked
-        && crate::apple_events::document_modified(&bundle_id, &path) == Some(true)
+    if sent == Some(true) && crate::apple_events::document_modified(&bundle_id, &path) == Some(true)
     {
         DocumentEdited::Marked
     } else {
@@ -172,13 +196,21 @@ unsafe fn document_path(element: AXUIElementRef) -> Option<std::path::PathBuf> {
     crate::apple_events::file_url_to_path(&url?)
 }
 
-/// Type a space and a backspace into `element` and check the text did not
-/// move.
+fn marked(unmoved: Option<bool>) -> DocumentEdited {
+    if unmoved == Some(true) {
+        DocumentEdited::Marked
+    } else {
+        DocumentEdited::NotMarked
+    }
+}
+
+/// Type a space and a backspace into `element`: whether the text stayed put,
+/// or `None` when the keys could not be sent.
 unsafe fn send_net_zero_edit(
     pid: i32,
     element: AXUIElementRef,
     caret_to_end: bool,
-) -> DocumentEdited {
+) -> Option<bool> {
     if caret_to_end {
         caret_to_end_of(element);
     }
@@ -187,15 +219,11 @@ unsafe fn send_net_zero_edit(
     if crate::input::keyboard::press_key(pid, "space", &[]).is_err()
         || crate::input::keyboard::press_key(pid, "delete", &[]).is_err()
     {
-        return DocumentEdited::NotMarked;
+        return None;
     }
     // Let the two keys land, then check they cancelled out.
     std::thread::sleep(Duration::from_millis(150));
-    if copy_string_attr(element, "AXValue") == before {
-        DocumentEdited::Marked
-    } else {
-        DocumentEdited::NotMarked
-    }
+    Some(copy_string_attr(element, "AXValue") == before)
 }
 
 /// The CGWindowID of the window `element` sits in.
@@ -232,7 +260,7 @@ unsafe fn caret_to_end_of(element: AXUIElementRef) {
 
 #[cfg(test)]
 mod tests {
-    use super::DocumentEdited;
+    use super::{is_single_line_field, DocumentEdited};
 
     #[test]
     fn only_a_document_left_unedited_gets_a_warning() {
@@ -244,5 +272,19 @@ mod tests {
         assert_eq!(DocumentEdited::NotADocument.structured(), None);
         assert_eq!(DocumentEdited::Marked.structured(), Some(true));
         assert_eq!(DocumentEdited::NotMarked.structured(), Some(false));
+    }
+
+    #[test]
+    fn only_single_line_fields_take_the_net_zero_edit() {
+        for role in ["AXTextField", "AXComboBox", "AXSearchField"] {
+            assert!(is_single_line_field(role), "{role}");
+        }
+        for role in ["AXTextArea", "AXWebArea", "AXGroup", "AXList", ""] {
+            assert!(!is_single_line_field(role), "{role}");
+        }
+        assert!(DocumentEdited::FieldMoved
+            .note()
+            .contains("read the field back"));
+        assert_eq!(DocumentEdited::FieldMoved.structured(), None);
     }
 }
