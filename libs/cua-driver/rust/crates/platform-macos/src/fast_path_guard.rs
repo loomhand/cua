@@ -270,7 +270,8 @@ fn window_observation(
     screen: (f64, f64),
     want: &WindowFingerprint,
 ) -> WindowObservation {
-    let windows = crate::windows::all_windows();
+    let mut windows = crate::windows::all_windows();
+    crate::windows::rank_by_live_order(&mut windows);
     let Some(info) = windows.iter().find(|w| w.window_id == window_id) else {
         return WindowObservation {
             exists: false,
