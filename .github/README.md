@@ -24,11 +24,12 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | macOS: capture the desktop with captureImage(in:) when there is no overlay to leave out | [#6028](https://github.com/trycua/cua/pull/6028) |
 | Linux: restore the active window by bouncing the core focus when only the window manager's record moved (xfwm4 takes the session keyboard's focus as the desktop's) | [#5642](https://github.com/trycua/cua/pull/5642) |
 | macOS: paint the cursor overlay as a tile around the cursors, not a full-screen frame | [#5640](https://github.com/trycua/cua/pull/5640) |
-| macOS and Windows: `click` with `verify_hit` fronts an element's window and posts a pixel click at its centre only when the hit test there finds the element | fork only |
-| macOS: background text to kitty goes in as an AXValue write, which kitty commits to its pty without a key window; a blank kitty read-back is unverified, not zero delivered | fork only |
-| macOS: find a window on another Space through the app's focused and main window before the remote-token probe, and note when an own-renderer app's off-Space pixels are stale | fork only |
+| macOS and Windows: `click` with `verify_hit` fronts an element's window and posts a pixel click at its centre only when the hit test there finds the element; a Linux `click` refuses `verify_hit` as an unknown argument | RFC [#6031](https://github.com/trycua/cua/issues/6031) |
+| macOS: background text to kitty goes in as an AXValue write, which kitty commits to its pty without a key window; a blank kitty read-back is unverified, not zero delivered | [#6029](https://github.com/trycua/cua/pull/6029) |
+| macOS: find a window on another Space through the app's focused and main window before the remote-token probe, and note when an own-renderer app's off-Space pixels are stale | [#6030](https://github.com/trycua/cua/pull/6030) |
 | macOS: a background AX write into a native single-line field outside web content sends the net-zero key edit (space, backspace), as a document window gets | removed in v0.38.0-loomhand.3: motivation disproved (WeChat's search box is not in its AX tree), no native field needed it, and it cost 2 keys and 150 ms per eligible AX write |
 | macOS: `list_windows` ranks `z_index` by the live on-screen order and reports `null` for off-screen windows, so the maximum is the frontmost window (third-party pull request, author kept) | [#5395](https://github.com/trycua/cua/pull/5395) |
+| macOS: that live order comes from an ids-only on-screen window list, read only where `z_index` is read, so no other window enumeration makes a second pass | fork only |
 | macOS: a pixel action takes the capture scale that a read of the same window at the same bounds, under the same display layout, already proved, instead of capturing the window again | fork only |
 
 Before a box image moves its cua-driver pin to `dev`:
