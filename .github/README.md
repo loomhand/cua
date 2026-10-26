@@ -21,12 +21,14 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | macOS: bring_to_front returns at once when the exact window is already the focused frontmost window | [#5411](https://github.com/trycua/cua/pull/5411) |
 | macOS: bring_to_front skips activation only when AppKit agrees the target is frontmost | [#5411](https://github.com/trycua/cua/pull/5411) |
 | Windows: a desktop click that closes its own target window succeeds | [#5412](https://github.com/trycua/cua/pull/5412) |
-| macOS: capture the desktop with captureImage(in:) when there is no overlay to leave out | fork only |
+| macOS: capture the desktop with captureImage(in:) when there is no overlay to leave out | [#6028](https://github.com/trycua/cua/pull/6028) |
 | Linux: restore the active window by bouncing the core focus when only the window manager's record moved (xfwm4 takes the session keyboard's focus as the desktop's) | [#5642](https://github.com/trycua/cua/pull/5642) |
 | macOS: paint the cursor overlay as a tile around the cursors, not a full-screen frame | [#5640](https://github.com/trycua/cua/pull/5640) |
 | macOS and Windows: `click` with `verify_hit` fronts an element's window and posts a pixel click at its centre only when the hit test there finds the element | fork only |
 | macOS: background text to kitty goes in as an AXValue write, which kitty commits to its pty without a key window; a blank kitty read-back is unverified, not zero delivered | fork only |
 | macOS: find a window on another Space through the app's focused and main window before the remote-token probe, and note when an own-renderer app's off-Space pixels are stale | fork only |
+| macOS: a background AX write into a native single-line field outside web content sends the net-zero key edit (space, backspace), as a document window gets | fork only |
+| macOS: `list_windows` ranks `z_index` by the live on-screen order and reports `null` for off-screen windows, so the maximum is the frontmost window (third-party pull request, author kept) | [#5395](https://github.com/trycua/cua/pull/5395) |
 
 Before a box image moves its cua-driver pin to `dev`:
 
