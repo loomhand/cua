@@ -117,6 +117,7 @@ fn verified_capture(
             reason: e.to_string(),
         })?;
         let scale = validate_capture_frame(window_id, bounds, w, h)?;
+        super::px_frame::prove_scale(window_id, bounds, scale);
         Ok((raw, w, h, scale))
     };
     if let Some(raw) = prefetched {
