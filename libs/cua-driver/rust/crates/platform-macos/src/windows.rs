@@ -748,6 +748,28 @@ mod tests {
     }
 
     #[test]
+    fn covering_window_of_another_app_is_frontmost() {
+        let mut windows = [
+            WindowInfo {
+                is_on_screen: false,
+                ..window(71, 800, "TextEdit")
+            },
+            window(70, 800, "TextEdit"),
+            window(45, 900, "Safari"),
+        ];
+        apply_live_z_order(&mut windows, &[45, 70]);
+        assert_eq!(windows[0].z_index, None);
+        assert!(windows[1].z_index < windows[2].z_index);
+        assert_eq!(
+            windows
+                .iter()
+                .max_by_key(|w| w.z_index)
+                .map(|w| w.window_id),
+            Some(45)
+        );
+    }
+
+    #[test]
     fn layer0_windows_win_over_accessory_windows() {
         let accessory = WindowInfo {
             layer: 3,
