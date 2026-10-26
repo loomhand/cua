@@ -563,7 +563,8 @@ pub fn prepare_background_pixel_click(pid: i32, wid: u32) -> bool {
 ///  - f40 = target pid   (Chromium synthetic-event filter)
 ///  - f51 / f91 / f92 = CGWindowID (window routing)
 ///  - f58 = constant click-group ID across all events (gesture coalescing)
-///  - `CGEventSetWindowLocation` per-event (screen point for both routes)
+///  - `CGEventSetWindowLocation` per-event: the window-local point, as
+///    WindowServer stamps a real click; the off-screen primer keeps (-1, -1)
 ///
 /// Uses the SkyLight route required by Chromium-compatible targets, with the
 /// public API only as a fallback when the private symbol is unavailable.
@@ -595,14 +596,14 @@ fn chromium_click_route_plan(
     count: usize,
 ) -> Vec<ChromiumClickRouteStep> {
     let screen_target = (screen_x, screen_y);
-    let _ = (win_local_x, win_local_y);
+    let local_target = (win_local_x, win_local_y);
     let off_screen = (-1.0, -1.0);
     let mut steps = vec![
         ChromiumClickRouteStep {
             kind: ChromiumClickEventKind::Move,
             event_location: screen_target,
-            skylight_window_location: screen_target,
-            public_window_location: screen_target,
+            skylight_window_location: local_target,
+            public_window_location: local_target,
             click_state: 0,
             phase: 2,
             button_number: 0,
@@ -639,8 +640,8 @@ fn chromium_click_route_plan(
         steps.push(ChromiumClickRouteStep {
             kind: ChromiumClickEventKind::Down,
             event_location: screen_target,
-            skylight_window_location: screen_target,
-            public_window_location: screen_target,
+            skylight_window_location: local_target,
+            public_window_location: local_target,
             click_state,
             phase: 3,
             button_number: 0,
@@ -650,8 +651,8 @@ fn chromium_click_route_plan(
         steps.push(ChromiumClickRouteStep {
             kind: ChromiumClickEventKind::Up,
             event_location: screen_target,
-            skylight_window_location: screen_target,
-            public_window_location: screen_target,
+            skylight_window_location: local_target,
+            public_window_location: local_target,
             click_state,
             phase: 3,
             button_number: 0,
@@ -663,10 +664,9 @@ fn chromium_click_route_plan(
 }
 
 /// Post the route plan for the Chromium-compatible background left-click
-/// recipe. `CGEvent::new_mouse_event` starts with the screen-space location.
-/// `CGEventSetWindowLocation` uses the screen point for both SkyLight and the
-/// public PID fallback. macOS interprets the stamped location in screen space
-/// even when the public route is used for a background process.
+/// recipe. `CGEvent::new_mouse_event` starts with the screen-space location,
+/// and `CGEventSetWindowLocation` gets the window-local point on both the
+/// SkyLight and the public PID route, the values a real click carries.
 #[allow(clippy::too_many_arguments)]
 pub fn click_at_xy_chromium(
     pid: i32,
@@ -1967,7 +1967,7 @@ mod tests {
     }
 
     #[test]
-    fn capture_bound_background_route_preserves_nonzero_origin_hit() {
+    fn background_route_stamps_the_window_local_point_a_real_click_carries() {
         let frame = crate::tools::px_frame::WindowPxFrame {
             bounds: crate::windows::WindowBounds {
                 x: 170.0,
@@ -1991,8 +1991,8 @@ mod tests {
                 ChromiumClickRouteStep {
                     kind: ChromiumClickEventKind::Move,
                     event_location: (564.0, 504.0),
-                    skylight_window_location: (564.0, 504.0),
-                    public_window_location: (564.0, 504.0),
+                    skylight_window_location: (394.0, 310.0),
+                    public_window_location: (394.0, 310.0),
                     click_state: 0,
                     phase: 2,
                     button_number: 0,
@@ -2024,8 +2024,8 @@ mod tests {
                 ChromiumClickRouteStep {
                     kind: ChromiumClickEventKind::Down,
                     event_location: (564.0, 504.0),
-                    skylight_window_location: (564.0, 504.0),
-                    public_window_location: (564.0, 504.0),
+                    skylight_window_location: (394.0, 310.0),
+                    public_window_location: (394.0, 310.0),
                     click_state: 1,
                     phase: 3,
                     button_number: 0,
@@ -2035,8 +2035,8 @@ mod tests {
                 ChromiumClickRouteStep {
                     kind: ChromiumClickEventKind::Up,
                     event_location: (564.0, 504.0),
-                    skylight_window_location: (564.0, 504.0),
-                    public_window_location: (564.0, 504.0),
+                    skylight_window_location: (394.0, 310.0),
+                    public_window_location: (394.0, 310.0),
                     click_state: 1,
                     phase: 3,
                     button_number: 0,
@@ -2046,28 +2046,13 @@ mod tests {
             ]
         );
 
-        let screen_to_canvas = (-frame.bounds.x, -frame.bounds.y);
-        let unconverted_journal_point = (
-            capture_local.0 + screen_to_canvas.0,
-            capture_local.1 + screen_to_canvas.1,
-        );
-        assert_eq!(unconverted_journal_point, (224.0, 116.0));
-        assert!(!(292.0..=496.0).contains(&unconverted_journal_point.0));
-
         let delivered = plan
             .iter()
             .find(|step| step.kind == ChromiumClickEventKind::Down && step.phase == 3)
             .expect("target mouse-down step");
         assert_eq!(delivered.event_location, (564.0, 504.0));
-        assert_eq!(delivered.skylight_window_location, (564.0, 504.0));
-        assert_eq!(delivered.public_window_location, (564.0, 504.0));
-        let skylight_journal_point = (
-            delivered.skylight_window_location.0 + screen_to_canvas.0,
-            delivered.skylight_window_location.1 + screen_to_canvas.1,
-        );
-        assert_eq!(skylight_journal_point, capture_local);
-        assert!((292.0..=496.0).contains(&skylight_journal_point.0));
-        assert!((132.0..=310.0).contains(&skylight_journal_point.1));
+        assert_eq!(delivered.skylight_window_location, capture_local);
+        assert_eq!(delivered.public_window_location, capture_local);
     }
 
     #[test]
