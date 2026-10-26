@@ -62,6 +62,8 @@ extern "C" {
         option: u32,
         relativeToWindow: u32,
     ) -> core_foundation::array::CFArrayRef;
+    fn CGWindowListCreate(option: u32, relativeToWindow: u32)
+        -> core_foundation::array::CFArrayRef;
 }
 
 /// Enumerate all windows (including off-screen).
@@ -339,21 +341,9 @@ fn enumerate_windows(
         });
     }
 
-    let on_screen_front_to_back: Vec<u32> = if options & kCGWindowListOptionOnScreenOnly == 0 {
-        enumerate_windows(
-            options | kCGWindowListOptionOnScreenOnly,
-            LayerFilter::AnyLayer,
-            None,
-            false,
-        )
-        .windows
-        .iter()
-        .map(|w| w.window_id)
-        .collect()
-    } else {
-        enumerated
-    };
-    apply_live_z_order(&mut results, &on_screen_front_to_back);
+    if options & kCGWindowListOptionOnScreenOnly != 0 {
+        apply_live_z_order(&mut results, &enumerated);
+    }
 
     if let Some(query) = &space_query {
         for window in &mut results {
@@ -386,6 +376,29 @@ fn window_on_current_space(
     current_space_id: Option<u64>,
 ) -> Option<bool> {
     Some(space_ids?.contains(&current_space_id?))
+}
+
+/// Sets `z_index` of windows from an all-windows enumeration by the live
+/// on-screen order; off-screen windows get `None`. Reads window ids only.
+pub(crate) fn rank_by_live_order(windows: &mut [WindowInfo]) {
+    use core_foundation::{
+        array::CFArray,
+        base::{CFTypeRef, TCFType},
+    };
+
+    let raw_ref = unsafe {
+        CGWindowListCreate(
+            kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+            kCGNullWindowID,
+        )
+    };
+    let ids: Vec<u32> = if raw_ref.is_null() {
+        Vec::new()
+    } else {
+        let raw: CFArray<CFTypeRef> = unsafe { CFArray::wrap_under_create_rule(raw_ref as _) };
+        raw.iter().map(|id| *id as usize as u32).collect()
+    };
+    apply_live_z_order(windows, &ids);
 }
 
 fn apply_live_z_order(windows: &mut [WindowInfo], on_screen_front_to_back: &[u32]) {
@@ -574,6 +587,7 @@ pub fn resolve_main_window_id(pid: i32) -> anyhow::Result<u32> {
     if pid_windows.is_empty() {
         anyhow::bail!("pid {pid} has no windows");
     }
+    rank_by_live_order(&mut pid_windows);
     let mut on_screen: Vec<&WindowInfo> = pid_windows.iter().filter(|w| w.is_on_screen).collect();
     if !on_screen.is_empty() {
         on_screen.sort_by_key(|window| std::cmp::Reverse(window.z_index));
