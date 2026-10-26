@@ -114,32 +114,57 @@ pub fn validate_capture_frame(
 /// Each active display as (id, bounds, backing scale).
 type DisplayLayout = Vec<(u32, [i64; 4], f64)>;
 
-/// Capture scales proven per window at its bounds, valid while the display
-/// layout they were proven under holds.
+/// Capture scales proven per window at its bounds, with the display under the window's centre.
 #[derive(Debug, Default)]
 struct ProvenScales {
-    layout: DisplayLayout,
-    windows: HashMap<u32, ([f64; 4], f64)>,
+    windows: HashMap<u32, Proven>,
+}
+
+#[derive(Debug)]
+struct Proven {
+    frame: [f64; 4],
+    scale: f64,
+    display: (u32, f64),
 }
 
 impl ProvenScales {
     fn get(&self, layout: &DisplayLayout, window_id: u32, bounds: &WindowBounds) -> Option<f64> {
-        if self.layout != *layout {
-            return None;
-        }
-        self.windows
-            .get(&window_id)
-            .filter(|(at, _)| *at == frame_of(bounds))
-            .map(|(_, scale)| *scale)
+        let p = self.windows.get(&window_id)?;
+        (p.frame == frame_of(bounds) && display_of(layout, bounds) == Some(p.display))
+            .then_some(p.scale)
     }
 
-    fn put(&mut self, layout: DisplayLayout, window_id: u32, bounds: &WindowBounds, scale: f64) {
-        if self.layout != layout || self.windows.len() >= PROVEN_CAP {
+    /// Keeps `scale` only when the display holding `bounds` backs it, which drops a capture taken before a move to another display.
+    fn put(&mut self, layout: &DisplayLayout, window_id: u32, bounds: &WindowBounds, scale: f64) {
+        self.windows.remove(&window_id);
+        let Some(display) = display_of(layout, bounds).filter(|&(_, backing)| backing == scale)
+        else {
+            return;
+        };
+        if self.windows.len() >= PROVEN_CAP {
             self.windows.clear();
-            self.layout = layout;
         }
-        self.windows.insert(window_id, (frame_of(bounds), scale));
+        self.windows.insert(
+            window_id,
+            Proven {
+                frame: frame_of(bounds),
+                scale,
+                display,
+            },
+        );
     }
+}
+
+/// The id and backing scale of the display that holds the centre of `b`.
+fn display_of(layout: &DisplayLayout, b: &WindowBounds) -> Option<(u32, f64)> {
+    let (cx, cy) = (b.x + b.width / 2.0, b.y + b.height / 2.0);
+    layout
+        .iter()
+        .find(|(_, [x, y, w, h], _)| {
+            let [x, y, w, h] = [*x, *y, *w, *h].map(|v| v as f64);
+            (x..x + w).contains(&cx) && (y..y + h).contains(&cy)
+        })
+        .map(|&(id, _, backing)| (id, backing))
 }
 
 fn frame_of(b: &WindowBounds) -> [f64; 4] {
@@ -171,12 +196,19 @@ pub fn prove_scale(window_id: u32, bounds: &WindowBounds, scale: f64) {
     let layout = display_layout();
     proven()
         .get_or_insert_with(ProvenScales::default)
-        .put(layout, window_id, bounds, scale);
+        .put(&layout, window_id, bounds, scale);
+}
+
+/// Forget the scale proven for `window_id`, after a capture of it that was not validated.
+pub fn forget_scale(window_id: u32) {
+    if let Some(p) = proven().as_mut() {
+        p.windows.remove(&window_id);
+    }
 }
 
 /// Resolve `window_id`'s screen origin and capture scale. Blocking: enumerates
 /// CGWindowList, and takes one window capture to measure the scale unless a
-/// capture at the same bounds and display layout already proved it.
+/// capture at the same bounds on the same display already proved it.
 pub fn resolve_window_px_frame(window_id: u32) -> Result<WindowPxFrame, PxFrameError> {
     let bounds = crate::windows::window_bounds_by_id(window_id)
         .filter(|b| b.width > 0.0 && b.height > 0.0)
@@ -204,7 +236,7 @@ pub fn resolve_window_px_frame(window_id: u32) -> Result<WindowPxFrame, PxFrameE
     let scale = validate_capture_frame(window_id, &bounds, pw, ph)?;
     proven()
         .get_or_insert_with(ProvenScales::default)
-        .put(layout, window_id, &bounds, scale);
+        .put(&layout, window_id, &bounds, scale);
     Ok(WindowPxFrame { bounds, scale })
 }
 
@@ -375,46 +407,62 @@ mod tests {
         ));
     }
 
-    fn layout(scale: f64) -> DisplayLayout {
-        vec![(1, [0, 0, 1280, 800], scale)]
+    fn layout(left: f64, right: f64) -> DisplayLayout {
+        vec![
+            (1, [0, 0, 1280, 800], left),
+            (2, [1280, 0, 1280, 800], right),
+        ]
+    }
+
+    fn at(x: f64) -> WindowBounds {
+        WindowBounds {
+            x,
+            y: 100.0,
+            width: 400.0,
+            height: 300.0,
+        }
     }
 
     #[test]
-    fn a_proven_scale_holds_only_for_the_same_bounds_and_display_layout() {
-        let at = frame(1.0).bounds;
+    fn a_proven_scale_holds_only_for_the_same_bounds_on_the_same_display() {
         let mut proven = ProvenScales::default();
-        proven.put(layout(1.0), 7, &at, 2.0);
-        assert_eq!(proven.get(&layout(1.0), 7, &at), Some(2.0));
-        assert_eq!(proven.get(&layout(1.0), 8, &at), None);
-        assert_eq!(proven.get(&layout(2.0), 7, &at), None);
-        let mut moved = at.clone();
-        moved.x += 1.0;
-        assert_eq!(proven.get(&layout(1.0), 7, &moved), None);
-        let mut resized = at.clone();
-        resized.width -= 1.0;
-        assert_eq!(proven.get(&layout(1.0), 7, &resized), None);
+        proven.put(&layout(2.0, 1.0), 7, &at(100.0), 2.0);
+        assert_eq!(proven.get(&layout(2.0, 1.0), 7, &at(100.0)), Some(2.0));
+        assert_eq!(proven.get(&layout(2.0, 1.0), 8, &at(100.0)), None);
+        assert_eq!(proven.get(&layout(2.0, 1.0), 7, &at(101.0)), None);
+        assert_eq!(proven.get(&layout(1.0, 1.0), 7, &at(100.0)), None);
     }
 
     #[test]
-    fn a_new_display_layout_forgets_every_proven_scale() {
-        let at = frame(1.0).bounds;
+    fn a_scale_the_display_under_the_bounds_does_not_back_is_not_kept() {
         let mut proven = ProvenScales::default();
-        proven.put(layout(1.0), 7, &at, 1.0);
-        proven.put(layout(2.0), 8, &at, 2.0);
-        assert_eq!(proven.get(&layout(2.0), 7, &at), None);
-        assert_eq!(proven.get(&layout(2.0), 8, &at), Some(2.0));
+        proven.put(&layout(2.0, 1.0), 7, &at(100.0), 2.0);
+        proven.put(&layout(2.0, 1.0), 7, &at(1500.0), 2.0);
+        assert_eq!(proven.get(&layout(2.0, 1.0), 7, &at(1500.0)), None);
+        assert_eq!(proven.get(&layout(2.0, 1.0), 7, &at(100.0)), None);
+    }
+
+    #[test]
+    fn a_same_size_window_on_another_display_is_not_taken_for_the_proven_one() {
+        let mut proven = ProvenScales::default();
+        proven.put(&layout(2.0, 2.0), 7, &at(100.0), 2.0);
+        let mut other = layout(2.0, 2.0);
+        other[0].0 = 3;
+        assert_eq!(proven.get(&other, 7, &at(100.0)), None);
     }
 
     #[test]
     fn proven_scales_start_over_past_their_cap() {
-        let at = frame(1.0).bounds;
         let mut proven = ProvenScales::default();
         for id in 0..PROVEN_CAP as u32 {
-            proven.put(layout(1.0), id, &at, 1.0);
+            proven.put(&layout(1.0, 1.0), id, &at(100.0), 1.0);
         }
-        proven.put(layout(1.0), PROVEN_CAP as u32, &at, 1.0);
+        proven.put(&layout(1.0, 1.0), PROVEN_CAP as u32, &at(100.0), 1.0);
         assert_eq!(proven.windows.len(), 1);
-        assert_eq!(proven.get(&layout(1.0), PROVEN_CAP as u32, &at), Some(1.0));
+        assert_eq!(
+            proven.get(&layout(1.0, 1.0), PROVEN_CAP as u32, &at(100.0)),
+            Some(1.0)
+        );
     }
 
     /// Locks the exact regression: a stale window_id used to fall through to
