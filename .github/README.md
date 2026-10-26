@@ -27,7 +27,7 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | macOS and Windows: `click` with `verify_hit` fronts an element's window and posts a pixel click at its centre only when the hit test there finds the element | fork only |
 | macOS: background text to kitty goes in as an AXValue write, which kitty commits to its pty without a key window; a blank kitty read-back is unverified, not zero delivered | fork only |
 | macOS: find a window on another Space through the app's focused and main window before the remote-token probe, and note when an own-renderer app's off-Space pixels are stale | fork only |
-| macOS: a background AX write into a native single-line field outside web content sends the net-zero key edit (space, backspace), as a document window gets | fork only |
+| macOS: a background AX write into a native single-line field outside web content sends the net-zero key edit (space, backspace), as a document window gets | removed in v0.38.0-loomhand.3: motivation disproved (WeChat's search box is not in its AX tree), no native field needed it, and it cost 2 keys and 150 ms per eligible AX write |
 | macOS: `list_windows` ranks `z_index` by the live on-screen order and reports `null` for off-screen windows, so the maximum is the frontmost window (third-party pull request, author kept) | [#5395](https://github.com/trycua/cua/pull/5395) |
 
 Before a box image moves its cua-driver pin to `dev`:
