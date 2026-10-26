@@ -357,7 +357,7 @@ pub(crate) fn default_window_for_pid(args: &mut serde_json::Value) {
         return;
     };
     let window_id = crate::ax::bindings::focused_window_id_of_pid(pid).or_else(|| {
-        crate::windows::all_windows()
+        crate::windows::visible_windows_without_spaces()
             .into_iter()
             .filter(|window| window.pid == pid && window.is_on_screen && window.layer == 0)
             .filter(|window| window.bounds.width >= 2.0 && window.bounds.height >= 2.0)

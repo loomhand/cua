@@ -208,7 +208,9 @@ impl Drop for ConsentTrees {
 
 fn read_consent_trees(pid: i32, window_id: u32) -> Result<ConsentTrees, BrowserRefusal> {
     let mut trees = ConsentTrees(Vec::new());
-    for candidate in consent_surface_ids(crate::windows::all_windows(), pid, window_id) {
+    let mut windows = crate::windows::all_windows();
+    crate::windows::rank_by_live_order(&mut windows);
+    for candidate in consent_surface_ids(windows, pid, window_id) {
         trees.push(walk_native_chrome_bounded(
             pid,
             candidate,

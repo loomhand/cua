@@ -58,6 +58,9 @@ impl Tool for ListWindowsTool {
         };
         let current_space_id = enumeration.current_space_id;
         let mut windows = enumeration.windows;
+        if !on_screen_only {
+            crate::windows::rank_by_live_order(&mut windows);
+        }
 
         // The driver's own windows (the agent cursor overlay) are not targets.
         let own_pid = std::process::id() as i32;
