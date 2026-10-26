@@ -228,7 +228,6 @@ impl Tool for SetValueTool {
                         pid,
                         window_id,
                         &value,
-                        ax_echo_surface,
                     )
                 })
                 .await
@@ -477,7 +476,6 @@ fn set_value_blocking(
     pid: i32,
     window_id: u32,
     value: &str,
-    ax_echo_surface: bool,
 ) -> anyhow::Result<SetValueOutcome> {
     let element = element_ptr as AXUIElementRef;
 
@@ -570,11 +568,7 @@ fn set_value_blocking(
             // An AX write bypasses NSTextView's edit model, so a document is
             // not marked edited and would never save the new text (DS-07).
             let document = if changed == Some(true) {
-                unsafe {
-                    crate::document_edit::ensure_marked_after_ax_write(pid, element, true, || {
-                        ax_echo_surface
-                    })
-                }
+                unsafe { crate::document_edit::ensure_marked_after_ax_write(pid, element, true) }
             } else {
                 crate::document_edit::DocumentEdited::NotADocument
             };
