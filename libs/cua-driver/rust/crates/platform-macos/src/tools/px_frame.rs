@@ -10,9 +10,17 @@
 //! window's origin there is nothing to add the local point to, so a missing or
 //! stale window is a refusal.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use cua_driver_core::protocol::ToolResult;
 
 use crate::windows::WindowBounds;
+
+/// Proven scales kept before the cache starts over.
+const PROVEN_CAP: usize = 64;
+
+static PROVEN: Mutex<Option<ProvenScales>> = Mutex::new(None);
 
 /// A window's screen origin plus the physical-pixels-per-logical-point scale
 /// of its `screencapture` output.
@@ -103,12 +111,83 @@ pub fn validate_capture_frame(
     }
 }
 
+/// Each active display as (id, bounds, backing scale).
+type DisplayLayout = Vec<(u32, [i64; 4], f64)>;
+
+/// Capture scales proven per window at its bounds, valid while the display
+/// layout they were proven under holds.
+#[derive(Debug, Default)]
+struct ProvenScales {
+    layout: DisplayLayout,
+    windows: HashMap<u32, ([f64; 4], f64)>,
+}
+
+impl ProvenScales {
+    fn get(&self, layout: &DisplayLayout, window_id: u32, bounds: &WindowBounds) -> Option<f64> {
+        if self.layout != *layout {
+            return None;
+        }
+        self.windows
+            .get(&window_id)
+            .filter(|(at, _)| *at == frame_of(bounds))
+            .map(|(_, scale)| *scale)
+    }
+
+    fn put(&mut self, layout: DisplayLayout, window_id: u32, bounds: &WindowBounds, scale: f64) {
+        if self.layout != layout || self.windows.len() >= PROVEN_CAP {
+            self.windows.clear();
+            self.layout = layout;
+        }
+        self.windows.insert(window_id, (frame_of(bounds), scale));
+    }
+}
+
+fn frame_of(b: &WindowBounds) -> [f64; 4] {
+    [b.x, b.y, b.width, b.height]
+}
+
+fn display_layout() -> DisplayLayout {
+    use core_graphics::display::CGDisplay;
+    CGDisplay::active_displays()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|id| {
+            let b = CGDisplay::new(id).bounds();
+            let bounds = [b.origin.x, b.origin.y, b.size.width, b.size.height].map(|v| v as i64);
+            (id, bounds, super::get_screen_size::get_backing_scale(id))
+        })
+        .collect()
+}
+
+fn proven() -> std::sync::MutexGuard<'static, Option<ProvenScales>> {
+    PROVEN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Record that a capture of `window_id` at `bounds` proved `scale`, so a pixel
+/// action on the window at the same bounds skips its own capture.
+pub fn prove_scale(window_id: u32, bounds: &WindowBounds, scale: f64) {
+    let layout = display_layout();
+    proven()
+        .get_or_insert_with(ProvenScales::default)
+        .put(layout, window_id, bounds, scale);
+}
+
 /// Resolve `window_id`'s screen origin and capture scale. Blocking: enumerates
-/// CGWindowList and takes one window capture to measure the scale.
+/// CGWindowList, and takes one window capture to measure the scale unless a
+/// capture at the same bounds and display layout already proved it.
 pub fn resolve_window_px_frame(window_id: u32) -> Result<WindowPxFrame, PxFrameError> {
     let bounds = crate::windows::window_bounds_by_id(window_id)
         .filter(|b| b.width > 0.0 && b.height > 0.0)
         .ok_or(PxFrameError::WindowNotFound { window_id })?;
+    let layout = display_layout();
+    let known = proven()
+        .as_ref()
+        .and_then(|p| p.get(&layout, window_id, &bounds));
+    if let Some(scale) = known {
+        return Ok(WindowPxFrame { bounds, scale });
+    }
     // A window-local point is meaningful only when the current capture proves
     // the same frame and scale. Never guess 1× on capture failure.
     let png = crate::capture::screenshot_window_bytes(window_id).map_err(|e| {
@@ -123,6 +202,9 @@ pub fn resolve_window_px_frame(window_id: u32) -> Result<WindowPxFrame, PxFrameE
             reason: e.to_string(),
         })?;
     let scale = validate_capture_frame(window_id, &bounds, pw, ph)?;
+    proven()
+        .get_or_insert_with(ProvenScales::default)
+        .put(layout, window_id, &bounds, scale);
     Ok(WindowPxFrame { bounds, scale })
 }
 
@@ -291,6 +373,48 @@ mod tests {
             validate_capture_frame(55, &bounds, 1920, 960),
             Err(PxFrameError::FrameMismatch { .. })
         ));
+    }
+
+    fn layout(scale: f64) -> DisplayLayout {
+        vec![(1, [0, 0, 1280, 800], scale)]
+    }
+
+    #[test]
+    fn a_proven_scale_holds_only_for_the_same_bounds_and_display_layout() {
+        let at = frame(1.0).bounds;
+        let mut proven = ProvenScales::default();
+        proven.put(layout(1.0), 7, &at, 2.0);
+        assert_eq!(proven.get(&layout(1.0), 7, &at), Some(2.0));
+        assert_eq!(proven.get(&layout(1.0), 8, &at), None);
+        assert_eq!(proven.get(&layout(2.0), 7, &at), None);
+        let mut moved = at.clone();
+        moved.x += 1.0;
+        assert_eq!(proven.get(&layout(1.0), 7, &moved), None);
+        let mut resized = at.clone();
+        resized.width -= 1.0;
+        assert_eq!(proven.get(&layout(1.0), 7, &resized), None);
+    }
+
+    #[test]
+    fn a_new_display_layout_forgets_every_proven_scale() {
+        let at = frame(1.0).bounds;
+        let mut proven = ProvenScales::default();
+        proven.put(layout(1.0), 7, &at, 1.0);
+        proven.put(layout(2.0), 8, &at, 2.0);
+        assert_eq!(proven.get(&layout(2.0), 7, &at), None);
+        assert_eq!(proven.get(&layout(2.0), 8, &at), Some(2.0));
+    }
+
+    #[test]
+    fn proven_scales_start_over_past_their_cap() {
+        let at = frame(1.0).bounds;
+        let mut proven = ProvenScales::default();
+        for id in 0..PROVEN_CAP as u32 {
+            proven.put(layout(1.0), id, &at, 1.0);
+        }
+        proven.put(layout(1.0), PROVEN_CAP as u32, &at, 1.0);
+        assert_eq!(proven.windows.len(), 1);
+        assert_eq!(proven.get(&layout(1.0), PROVEN_CAP as u32, &at), Some(1.0));
     }
 
     /// Locks the exact regression: a stale window_id used to fall through to
