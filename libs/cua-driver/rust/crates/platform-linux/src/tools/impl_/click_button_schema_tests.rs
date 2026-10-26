@@ -55,3 +55,31 @@ fn gtk_process_maps_are_detected_without_matching_unrelated_libraries() {
         "7f00-7f01 r-xp /usr/lib/x86_64-linux-gnu/libgdk_pixbuf-2.0.so"
     ));
 }
+
+#[tokio::test]
+async fn verify_hit_is_refused_as_an_unknown_argument() {
+    let mut registry = cua_driver_core::tool::ToolRegistry::new();
+    registry.register(Box::new(ClickTool {
+        state: super::ToolState::new(),
+    }));
+    for verify_hit in [true, false] {
+        let result = registry
+            .invoke(
+                "click",
+                serde_json::json!({"pid": 1, "element_token": "s00000001:1", "verify_hit": verify_hit}),
+            )
+            .await;
+        assert_eq!(result.is_error, Some(true), "verify_hit={verify_hit}");
+        let refusal = &result.structured_content.expect("structured refusal")["refusal"];
+        assert_eq!(
+            refusal["code"], "invalid_arguments",
+            "verify_hit={verify_hit}"
+        );
+        assert!(
+            refusal["message"]
+                .as_str()
+                .is_some_and(|m| m.starts_with("click: unknown argument verify_hit;")),
+            "verify_hit={verify_hit}: {refusal}"
+        );
+    }
+}
