@@ -135,7 +135,8 @@ end tell"#
 }
 
 fn native_window_target(window_id: u32) -> anyhow::Result<NativeWindowTarget> {
-    let windows = crate::windows::all_windows();
+    let mut windows = crate::windows::all_windows();
+    crate::windows::rank_by_live_order(&mut windows);
     let target = windows
         .iter()
         .find(|w| w.window_id == window_id)
