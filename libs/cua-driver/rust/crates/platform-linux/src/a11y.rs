@@ -30,6 +30,7 @@
 //! accessibility must never be able to fail daemon startup.
 
 use std::sync::Once;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use atspi::zbus;
@@ -45,6 +46,8 @@ const ACCESSIBILITY_STATUS_INTERFACE: &str = "org.a11y.Status";
 const SCREEN_READER_ENABLED_PROPERTY: &str = "ScreenReaderEnabled";
 /// Companion property GTK/Qt watch to load their AT-SPI bridges.
 const ACCESSIBILITY_IS_ENABLED_PROPERTY: &str = "IsEnabled";
+/// Bound on the session-bus question whether GNOME Shell is running.
+const GNOME_SHELL_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AdvertiseMode {
@@ -66,14 +69,15 @@ pub fn ensure_chromium_accessibility_enabled() {
             std::env::var("CUA_DRIVER_RS_A11Y_ADVERTISE_MODE")
                 .ok()
                 .as_deref(),
-            desktop_name(
-                std::env::var("XDG_CURRENT_DESKTOP")
-                    .or_else(|_| std::env::var("XDG_SESSION_DESKTOP"))
-                    .or_else(|_| std::env::var("DESKTOP_SESSION"))
-                    .ok(),
-                gnome_shell_on_session_bus,
-            )
-            .as_deref(),
+            || {
+                desktop_name(
+                    std::env::var("XDG_CURRENT_DESKTOP")
+                        .or_else(|_| std::env::var("XDG_SESSION_DESKTOP"))
+                        .or_else(|_| std::env::var("DESKTOP_SESSION"))
+                        .ok(),
+                    gnome_shell_on_session_bus,
+                )
+            },
         );
         if mode == AdvertiseMode::None {
             tracing::debug!(
@@ -108,10 +112,15 @@ fn gnome_shell_on_session_bus() -> bool {
                 .build()
                 .ok()?;
             runtime.block_on(async {
-                let bus = zbus::Connection::session().await.ok()?;
-                let dbus = zbus::fdo::DBusProxy::new(&bus).await.ok()?;
-                let shell = zbus::names::BusName::try_from("org.gnome.Shell").ok()?;
-                dbus.name_has_owner(shell).await.ok()
+                tokio::time::timeout(GNOME_SHELL_PROBE_TIMEOUT, async {
+                    let bus = zbus::Connection::session().await.ok()?;
+                    let dbus = zbus::fdo::DBusProxy::new(&bus).await.ok()?;
+                    let shell = zbus::names::BusName::try_from("org.gnome.Shell").ok()?;
+                    dbus.name_has_owner(shell).await.ok()
+                })
+                .await
+                .ok()
+                .flatten()
             })
         })
         .ok()
@@ -164,10 +173,10 @@ async fn advertise_accessibility(mode: AdvertiseMode) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn advertise_mode_from(
+fn advertise_mode_from<D: AsRef<str>>(
     disabled: bool,
     configured: Option<&str>,
-    desktop: Option<&str>,
+    desktop: impl FnOnce() -> Option<D>,
 ) -> AdvertiseMode {
     if disabled {
         return AdvertiseMode::None;
@@ -185,9 +194,9 @@ fn advertise_mode_from(
                 mode = other,
                 "unknown CUA_DRIVER_RS_A11Y_ADVERTISE_MODE; using desktop default"
             );
-            desktop_default_mode(desktop)
+            desktop_default_mode(desktop().as_ref().map(AsRef::as_ref))
         }
-        None => desktop_default_mode(desktop),
+        None => desktop_default_mode(desktop().as_ref().map(AsRef::as_ref)),
     }
 }
 
@@ -229,7 +238,7 @@ mod tests {
         let desktop = desktop_name(None, || true);
         assert_eq!(desktop.as_deref(), Some("GNOME"));
         assert_eq!(
-            advertise_mode_from(false, None, desktop.as_deref()),
+            advertise_mode_from(false, None, || desktop.as_deref()),
             AdvertiseMode::IsEnabledOnly
         );
         assert_eq!(desktop_name(None, || false), None);
@@ -244,7 +253,7 @@ mod tests {
     #[test]
     fn gnome_default_does_not_claim_a_screen_reader() {
         assert_eq!(
-            advertise_mode_from(false, None, Some("ubuntu:GNOME")),
+            advertise_mode_from(false, None, || Some("ubuntu:GNOME")),
             AdvertiseMode::IsEnabledOnly
         );
     }
@@ -252,11 +261,11 @@ mod tests {
     #[test]
     fn cosmic_default_does_not_claim_a_screen_reader() {
         assert_eq!(
-            advertise_mode_from(false, None, Some("COSMIC")),
+            advertise_mode_from(false, None, || Some("COSMIC")),
             AdvertiseMode::IsEnabledOnly
         );
         assert_eq!(
-            advertise_mode_from(false, None, Some("pop:COSMIC")),
+            advertise_mode_from(false, None, || Some("pop:COSMIC")),
             AdvertiseMode::IsEnabledOnly
         );
     }
@@ -265,7 +274,7 @@ mod tests {
     fn cinnamon_default_leaves_accessibility_status_untouched() {
         for desktop in ["Cinnamon", "X-Cinnamon", "LinuxMint:X-Cinnamon"] {
             assert_eq!(
-                advertise_mode_from(false, None, Some(desktop)),
+                advertise_mode_from(false, None, || Some(desktop)),
                 AdvertiseMode::None,
                 "desktop={desktop}"
             );
@@ -275,7 +284,7 @@ mod tests {
     #[test]
     fn cinnamon_safety_wins_in_composite_desktop_names() {
         assert_eq!(
-            advertise_mode_from(false, None, Some("GNOME:X-Cinnamon")),
+            advertise_mode_from(false, None, || Some("GNOME:X-Cinnamon")),
             AdvertiseMode::None
         );
     }
@@ -283,7 +292,7 @@ mod tests {
     #[test]
     fn non_gnome_default_preserves_chromium_compatibility() {
         assert_eq!(
-            advertise_mode_from(false, None, Some("KDE")),
+            advertise_mode_from(false, None, || Some("KDE")),
             AdvertiseMode::All
         );
     }
@@ -291,15 +300,15 @@ mod tests {
     #[test]
     fn explicit_mode_overrides_desktop_default() {
         assert_eq!(
-            advertise_mode_from(false, Some("all"), Some("GNOME")),
+            advertise_mode_from(false, Some("all"), || Some("GNOME")),
             AdvertiseMode::All
         );
         assert_eq!(
-            advertise_mode_from(false, Some("is_enabled_only"), Some("KDE")),
+            advertise_mode_from(false, Some("is_enabled_only"), || Some("KDE")),
             AdvertiseMode::IsEnabledOnly
         );
         assert_eq!(
-            advertise_mode_from(false, Some("none"), Some("KDE")),
+            advertise_mode_from(false, Some("none"), || Some("KDE")),
             AdvertiseMode::None
         );
     }
@@ -307,8 +316,25 @@ mod tests {
     #[test]
     fn legacy_disable_wins_over_explicit_mode() {
         assert_eq!(
-            advertise_mode_from(true, Some("all"), Some("KDE")),
+            advertise_mode_from(true, Some("all"), || Some("KDE")),
             AdvertiseMode::None
+        );
+    }
+
+    #[test]
+    fn a_disabled_or_explicit_mode_never_asks_for_the_desktop() {
+        let unasked = || -> Option<&str> { panic!("the desktop is asked only for the default") };
+        assert_eq!(
+            advertise_mode_from(true, None, unasked),
+            AdvertiseMode::None
+        );
+        assert_eq!(
+            advertise_mode_from(false, Some("none"), unasked),
+            AdvertiseMode::None
+        );
+        assert_eq!(
+            advertise_mode_from(false, Some("all"), unasked),
+            AdvertiseMode::All
         );
     }
 }
