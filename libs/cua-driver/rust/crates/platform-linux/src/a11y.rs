@@ -63,11 +63,14 @@ pub fn ensure_chromium_accessibility_enabled() {
             std::env::var("CUA_DRIVER_RS_A11Y_ADVERTISE_MODE")
                 .ok()
                 .as_deref(),
-            std::env::var("XDG_CURRENT_DESKTOP")
-                .or_else(|_| std::env::var("XDG_SESSION_DESKTOP"))
-                .or_else(|_| std::env::var("DESKTOP_SESSION"))
-                .ok()
-                .as_deref(),
+            desktop_name(
+                std::env::var("XDG_CURRENT_DESKTOP")
+                    .or_else(|_| std::env::var("XDG_SESSION_DESKTOP"))
+                    .or_else(|_| std::env::var("DESKTOP_SESSION"))
+                    .ok(),
+                gnome_shell_on_session_bus,
+            )
+            .as_deref(),
         );
         if mode == AdvertiseMode::None {
             tracing::debug!(
@@ -82,6 +85,36 @@ pub fn ensure_chromium_accessibility_enabled() {
             );
         }
     });
+}
+
+/// The session's desktop: the one its environment names, else GNOME when GNOME
+/// Shell owns its bus name, for a daemon started from a system unit whose
+/// environment names no desktop.
+fn desktop_name(env: Option<String>, gnome_shell: impl FnOnce() -> bool) -> Option<String> {
+    env.or_else(|| gnome_shell().then(|| "GNOME".to_owned()))
+}
+
+/// Whether `org.gnome.Shell` has an owner on the session bus, asked from a
+/// thread of its own for the same reason as the advertisement below.
+fn gnome_shell_on_session_bus() -> bool {
+    std::thread::Builder::new()
+        .name("cua-a11y-desktop".into())
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .ok()?;
+            runtime.block_on(async {
+                let bus = zbus::Connection::session().await.ok()?;
+                let dbus = zbus::fdo::DBusProxy::new(&bus).await.ok()?;
+                let shell = zbus::names::BusName::try_from("org.gnome.Shell").ok()?;
+                dbus.name_has_owner(shell).await.ok()
+            })
+        })
+        .ok()
+        .and_then(|thread| thread.join().ok())
+        .flatten()
+        .unwrap_or(false)
 }
 
 fn advertise_accessibility_to_session(mode: AdvertiseMode) -> anyhow::Result<()> {
@@ -186,7 +219,24 @@ async fn is_flag_set(status: &zbus::Proxy<'_>, property: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{advertise_mode_from, AdvertiseMode};
+    use super::{advertise_mode_from, desktop_name, AdvertiseMode};
+
+    #[test]
+    fn a_session_with_no_desktop_variables_but_gnome_shell_counts_as_gnome() {
+        let desktop = desktop_name(None, || true);
+        assert_eq!(desktop.as_deref(), Some("GNOME"));
+        assert_eq!(
+            advertise_mode_from(false, None, desktop.as_deref()),
+            AdvertiseMode::IsEnabledOnly
+        );
+        assert_eq!(desktop_name(None, || false), None);
+        assert_eq!(
+            desktop_name(Some("XFCE".to_owned()), || panic!(
+                "the bus is asked only without a desktop variable"
+            )),
+            Some("XFCE".to_owned())
+        );
+    }
 
     #[test]
     fn gnome_default_does_not_claim_a_screen_reader() {
