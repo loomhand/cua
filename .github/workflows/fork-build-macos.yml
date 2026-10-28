@@ -1,0 +1,30 @@
+name: "Fork: Build macOS"
+
+on:
+  push:
+    branches: ["cmgs/build-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  wxqt:
+    runs-on: macos-15-intel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Build the Qt fixture app
+        run: |
+          brew install qt
+          cmake -S probe/wxqt -B build -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+          cmake --build build -j
+          "$(brew --prefix qt)/bin/macdeployqt" "build/WX Qt.app"
+          codesign --force --deep -s - "build/WX Qt.app"
+          tar -czf wxqt.tgz -C build "WX Qt.app"
+
+      - name: Upload
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: wxqt
+          path: wxqt.tgz

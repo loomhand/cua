@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.16)
+project(wxqt LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
+add_executable(wxqt MACOSX_BUNDLE main.cpp)
+set_target_properties(wxqt PROPERTIES OUTPUT_NAME "WX Qt" MACOSX_BUNDLE_GUI_IDENTIFIER io.github.loomhand.wxfocus.qt)
+target_link_libraries(wxqt PRIVATE Qt6::Widgets)
