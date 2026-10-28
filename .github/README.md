@@ -27,12 +27,13 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | macOS and Windows: `click` with `verify_hit` fronts an element's window and posts a pixel click at its centre only when the hit test there finds the element; a Linux `click` refuses `verify_hit` as an unknown argument | RFC [#6031](https://github.com/trycua/cua/issues/6031) |
 | macOS: background text to kitty goes in as an AXValue write, which kitty commits to its pty without a key window; a blank kitty read-back is unverified, not zero delivered | [#6029](https://github.com/trycua/cua/pull/6029) |
 | macOS: find a window on another Space through the app's focused and main window before the remote-token probe, and note when an own-renderer app's off-Space pixels are stale | [#6030](https://github.com/trycua/cua/pull/6030) |
-| macOS: a background AX write into a native single-line field outside web content sends the net-zero key edit (space, backspace), as a document window gets | removed in v0.38.0-loomhand.3: motivation disproved (WeChat's search box is not in its AX tree), no native field needed it, and it cost 2 keys and 150 ms per eligible AX write |
 | macOS: `list_windows` ranks `z_index` by the live on-screen order and reports `null` for off-screen windows, so the maximum is the frontmost window (third-party pull request, author kept) | [#5395](https://github.com/trycua/cua/pull/5395) |
 | macOS: that live order comes from an ids-only on-screen window list, read only where `z_index` is read, so no other window enumeration makes a second pass | fork only |
 | macOS: a pixel action takes the capture scale that a read of the same window at the same bounds, under the same display layout, already proved, instead of capturing the window again | fork only |
-| macOS: the background left-click route stamps the event's window location with the window-local point, as WindowServer stamps a real click, not the screen point; an app that reads that field (WeChat 4.1 on a two-display Mac) clicked off by the window's origin | fork only |
-| macOS: a background pixel click on a text input whose AXPress leaves it unfocused (a Qt line edit takes the press as a no-op) gives it the keyboard focus, as a real click does | fork only |
+| macOS: the background left-click route stamps the event's window location with the window-local point, as WindowServer stamps a real click, not the screen point; an app that reads that field (WeChat 4.1 on a two-display Mac) clicked off by the window's origin | [#6126](https://github.com/trycua/cua/pull/6126) |
+| macOS: a background pixel click on a text input whose AXPress leaves it unfocused (a Qt line edit takes the press as a no-op) gives it the keyboard focus, as a real click does | [#6118](https://github.com/trycua/cua/pull/6118) |
+| Linux: a launch settles on the window of a process its launcher forked (LibreOffice's oosplash), and a command line matches a window class by its program, not its last argument | [#6119](https://github.com/trycua/cua/pull/6119) |
+| Linux: with no desktop variable set, a session whose GNOME Shell owns its bus name counts as GNOME, so the advertisement is IsEnabled only and Orca does not start | [#6120](https://github.com/trycua/cua/pull/6120) |
 
 Before a box image moves its cua-driver pin to `dev`:
 
