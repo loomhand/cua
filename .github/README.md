@@ -32,6 +32,7 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | macOS: that live order comes from an ids-only on-screen window list, read only where `z_index` is read, so no other window enumeration makes a second pass | fork only |
 | macOS: a pixel action takes the capture scale that a read of the same window at the same bounds, under the same display layout, already proved, instead of capturing the window again | fork only |
 | macOS: the background left-click route stamps the event's window location with the window-local point, as WindowServer stamps a real click, not the screen point; an app that reads that field (WeChat 4.1 on a two-display Mac) clicked off by the window's origin | fork only |
+| macOS: a background pixel click on a text input whose AXPress leaves it unfocused (a Qt line edit takes the press as a no-op) gives it the keyboard focus, as a real click does | fork only |
 
 Before a box image moves its cua-driver pin to `dev`:
 
