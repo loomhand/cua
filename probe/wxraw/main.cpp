@@ -22,7 +22,7 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
-        p.fillRect(rect(), QColor(236, 236, 236));
+        p.fillRect(QRect(0, 0, width(), height()), QColor(236, 236, 236));
         draw(p, searchBox(), search, focus == 0, "Search");
         draw(p, inputBox(), input, focus == 1, "");
     }
