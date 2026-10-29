@@ -296,11 +296,27 @@ pub fn enter_exact_window_key(pid: pid_t, target_wid: u32) -> Result<WindowKeySc
     let before = key_focus_of_pid(pid);
     let previous = before.window;
     let order_before = app_window_order(pid);
+    let variant = std::env::var("CUA_WXF_VARIANT").unwrap_or_default();
+    eprintln!("wxf key_scope pid={pid} target={target_wid} before={before:?} variant={variant}");
+    if variant == "skip" && before.routes_to(target_wid) {
+        return Ok(WindowKeyScope {
+            pid,
+            target: target_wid,
+            previous,
+            order_before,
+            primed: KeyPrime::AlreadyKey,
+        });
+    }
+    let defocus = if variant == "nodefocus" {
+        previous.filter(|p| *p != target_wid)
+    } else {
+        previous
+    };
     let primed = prime_exact_window_key(
         target_wid,
         || key_focus_of_pid(pid),
         || {
-            let ok = post_window_key_records(pid, previous, target_wid);
+            let ok = post_window_key_records(pid, defocus, target_wid);
             if ok {
                 await_key_focus(pid, target_wid, std::time::Duration::from_millis(400));
             }
