@@ -17,11 +17,11 @@ jobs:
       - name: Build the Qt fixture app
         run: |
           brew install qt
-          cmake -S probe/wxqt -B build -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+          cmake -S probe/wxraw -B build -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
           cmake --build build -j
-          "$(brew --prefix qt)/bin/macdeployqt" "build/WX Qt.app"
-          codesign --force --deep -s - "build/WX Qt.app"
-          tar -czf wxqt.tgz -C build "WX Qt.app"
+          "$(brew --prefix qt)/bin/macdeployqt" "build/WX Raw.app"
+          codesign --force --deep -s - "build/WX Raw.app"
+          tar -czf wxqt.tgz -C build "WX Raw.app"
 
       - name: Upload
         uses: actions/upload-artifact@v7.0.2
