@@ -37,6 +37,7 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | macOS: a desktop capture wakes a display that is off and waits out the login shield, or refuses with `display_asleep`, instead of trapping in ScreenCaptureKit (SIGILL) | [#6157](https://github.com/trycua/cua/pull/6157) |
 | macOS: background `type_text` and `press_key` with `locked_input:true` send pid-routed keys while the screen is locked, unverified; every other route still refuses with `screen_locked` | [#6158](https://github.com/trycua/cua/pull/6158) |
 | macOS: the key-window records `type_text` posts never defocus the window they make key, so a Qt window without a focused accessibility element (WeChat) keeps its focused field | [#6156](https://github.com/trycua/cua/pull/6156) |
+| Linux: a pid whose app did not answer `GetChildren` gets `app_unresponsive` at once, without a walk, until a `GetState` probe to its root gets a reply | fork only |
 
 Before a box image moves its cua-driver pin to `dev`:
 
