@@ -343,6 +343,10 @@ pub(crate) async fn proxy(socket_path: &str) -> anyhow::Result<()> {
     let stream = tokio::net::UnixStream::connect(socket_path).await?;
     #[cfg(windows)]
     let stream = tokio::net::windows::named_pipe::ClientOptions::new().open(socket_path)?;
+    #[cfg(windows)]
+    cua_driver_core::daemon::ensure_pipe_server_is_current_user(
+        std::os::windows::io::AsRawHandle::as_raw_handle(&stream),
+    )?;
     relay(stream).await
 }
 
