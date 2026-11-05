@@ -306,6 +306,9 @@ pub fn send_request(socket_path: &str, request: &DaemonRequest) -> anyhow::Resul
             }
         };
 
+        ensure_pipe_server_is_current_user(std::os::windows::io::AsRawHandle::as_raw_handle(
+            &pipe,
+        ))?;
         let mut writer = pipe.try_clone()?;
         writer.write_all((serde_json::to_string(request)? + "\n").as_bytes())?;
         writer.flush()?;
@@ -319,6 +322,80 @@ pub fn send_request(socket_path: &str, request: &DaemonRequest) -> anyhow::Resul
     #[cfg(not(target_os = "windows"))]
     {
         anyhow::bail!("daemon client not supported on this platform (socket path: {socket_path})");
+    }
+}
+
+/// Refuse a named pipe whose server runs as another Windows account. A pipe
+/// name is machine-wide, so another local user can serve it first.
+#[cfg(target_os = "windows")]
+pub fn ensure_pipe_server_is_current_user(
+    pipe: std::os::windows::io::RawHandle,
+) -> anyhow::Result<()> {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::EqualSid;
+    use windows::Win32::System::Pipes::GetNamedPipeServerProcessId;
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    let mut server_pid = 0_u32;
+    unsafe { GetNamedPipeServerProcessId(HANDLE(pipe), &mut server_pid) }
+        .map_err(|error| anyhow::anyhow!("read the named pipe server's process id: {error}"))?;
+    let server_user = unsafe {
+        let process =
+            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, server_pid).map_err(|error| {
+                anyhow::anyhow!("open named pipe server process {server_pid}: {error}")
+            })?;
+        let user = process_token_user(process);
+        let _ = CloseHandle(process);
+        user
+    };
+    let current_user = unsafe { process_token_user(GetCurrentProcess()) };
+    let same_user = match (&server_user, &current_user) {
+        (Some(server), Some(current)) => {
+            unsafe { EqualSid(token_user_sid(server), token_user_sid(current)) }.is_ok()
+        }
+        _ => false,
+    };
+    if !same_user {
+        anyhow::bail!(
+            "named pipe server process {server_pid} does not run as this Windows account; refusing to use it"
+        );
+    }
+    Ok(())
+}
+
+/// The process token's `TOKEN_USER`, in a buffer aligned for it.
+#[cfg(target_os = "windows")]
+unsafe fn process_token_user(process: windows::Win32::Foundation::HANDLE) -> Option<Vec<u64>> {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY};
+    use windows::Win32::System::Threading::OpenProcessToken;
+
+    let mut token = HANDLE::default();
+    OpenProcessToken(process, TOKEN_QUERY, &mut token).ok()?;
+    let mut required = 0_u32;
+    let _ = GetTokenInformation(token, TokenUser, None, 0, &mut required);
+    let mut buffer = vec![0_u64; (required as usize).div_ceil(8)];
+    let read = GetTokenInformation(
+        token,
+        TokenUser,
+        Some(buffer.as_mut_ptr().cast()),
+        (buffer.len() * 8) as u32,
+        &mut required,
+    );
+    let _ = CloseHandle(token);
+    (required != 0 && read.is_ok()).then_some(buffer)
+}
+
+#[cfg(target_os = "windows")]
+fn token_user_sid(buffer: &[u64]) -> windows::Win32::Security::PSID {
+    unsafe {
+        (*buffer
+            .as_ptr()
+            .cast::<windows::Win32::Security::TOKEN_USER>())
+        .User
+        .Sid
     }
 }
 
@@ -410,6 +487,45 @@ mod tests {
         assert_eq!(
             metadata.mcp_protocol_version,
             cua_driver_contract::MCP_PROTOCOL_VERSION
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn a_pipe_this_account_serves_passes_the_server_user_check() {
+        use std::os::windows::io::AsRawHandle;
+
+        let name = format!(
+            r"\\.\pipe\cua-driver-core-test-owner-{}",
+            std::process::id()
+        );
+        let _server = tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&name)
+            .expect("create the pipe");
+        let client = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&name)
+            .expect("open the pipe");
+        super::ensure_pipe_server_is_current_user(client.as_raw_handle())
+            .expect("this account serves the pipe");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_handle_that_is_not_a_pipe_fails_the_server_user_check() {
+        use std::os::windows::io::AsRawHandle;
+
+        let file = std::fs::File::open(std::env::current_exe().expect("test binary path"))
+            .expect("open the test binary");
+        let error = super::ensure_pipe_server_is_current_user(file.as_raw_handle())
+            .expect_err("a file has no pipe server");
+        assert!(
+            error
+                .to_string()
+                .starts_with("read the named pipe server's process id:"),
+            "{error}"
         );
     }
 }
