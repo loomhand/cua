@@ -373,7 +373,16 @@ fn connect(socket_path: &str) -> Result<ServiceStream, DriverError> {
             .write(true)
             .open(socket_path)
         {
-            Ok(pipe) => return Ok(pipe),
+            Ok(pipe) => {
+                return cua_driver_core::daemon::ensure_pipe_server_is_current_user(
+                    std::os::windows::io::AsRawHandle::as_raw_handle(&pipe),
+                )
+                .map(|()| pipe)
+                .map_err(|error| DriverError::Transport {
+                    socket_path: socket_path.to_owned(),
+                    reason: error.to_string(),
+                });
+            }
             Err(_) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
