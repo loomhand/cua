@@ -545,6 +545,12 @@ async fn run_control_connection(
             Some(c) => c,
             None => return,
         };
+        if let Err(e) = cua_driver_core::daemon::ensure_pipe_server_is_current_user(
+            std::os::windows::io::AsRawHandle::as_raw_handle(&client),
+        ) {
+            warn!(session_id = %session_id, "control connection: {e}");
+            return;
+        }
         if let Err(e) = client.write_all(line.as_bytes()).await {
             debug!("control connection: write session_begin failed: {e}");
             return;
