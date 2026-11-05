@@ -14,23 +14,19 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 
 | Patch | Upstream |
 |---|---|
-| never borrow keycode 8 for a Linux text character | [#5592](https://github.com/trycua/cua/pull/5592) |
-| stop the Linux focus restore when the saved window is gone | [#5593](https://github.com/trycua/cua/pull/5593) |
 | rebase Chromium screen extents only from a frame the size of the target window | [#5414](https://github.com/trycua/cua/pull/5414) |
 | Windows: wait 40 ms after a foreground desktop click, as after a background one | [#5410](https://github.com/trycua/cua/pull/5410) |
 | macOS: bring_to_front returns at once when the exact window is already the focused frontmost window | [#5411](https://github.com/trycua/cua/pull/5411) |
 | macOS: bring_to_front skips activation only when AppKit agrees the target is frontmost | [#5411](https://github.com/trycua/cua/pull/5411) |
 | Windows: a desktop click that closes its own target window succeeds | [#5412](https://github.com/trycua/cua/pull/5412) |
 | macOS: capture the desktop with captureImage(in:) when there is no overlay to leave out | [#6028](https://github.com/trycua/cua/pull/6028) |
-| Linux: restore the active window by bouncing the core focus when only the window manager's record moved (xfwm4 takes the session keyboard's focus as the desktop's) | [#5642](https://github.com/trycua/cua/pull/5642) |
-| macOS: paint the cursor overlay as a tile around the cursors, not a full-screen frame | [#5640](https://github.com/trycua/cua/pull/5640) |
 | macOS and Windows: `click` with `verify_hit` fronts an element's window and posts a pixel click at its centre only when the hit test there finds the element; a Linux `click` refuses `verify_hit` as an unknown argument | RFC [#6031](https://github.com/trycua/cua/issues/6031) |
 | macOS: background text to kitty goes in as an AXValue write, which kitty commits to its pty without a key window; a blank kitty read-back is unverified, not zero delivered | [#6029](https://github.com/trycua/cua/pull/6029) |
 | macOS: find a window on another Space through the app's focused and main window before the remote-token probe, and note when an own-renderer app's off-Space pixels are stale | [#6030](https://github.com/trycua/cua/pull/6030) |
-| macOS: `list_windows` ranks `z_index` by the live on-screen order and reports `null` for off-screen windows, so the maximum is the frontmost window (third-party pull request, author kept) | [#5395](https://github.com/trycua/cua/pull/5395) |
+| macOS: `list_windows` ranks `z_index` by the live on-screen order and reports `null` for off-screen windows, so the maximum is the frontmost window (third-party pull request, author kept); upstream's contiguous renumbering after filters ([#2172](https://github.com/trycua/cua/pull/2172)) keeps that order and leaves `null` alone | [#5395](https://github.com/trycua/cua/pull/5395) |
 | macOS: that live order comes from an ids-only on-screen window list, read only where `z_index` is read, so no other window enumeration makes a second pass | fork only |
 | macOS: a pixel action takes the capture scale that a read of the same window at the same bounds, under the same display layout, already proved, instead of capturing the window again | fork only |
-| macOS: the background left-click route stamps the event's window location with the window-local point, as WindowServer stamps a real click, not the screen point; an app that reads that field (WeChat 4.1 on a two-display Mac) clicked off by the window's origin | [#6126](https://github.com/trycua/cua/pull/6126) |
+| macOS: the background left-click route stamps the event's window location with the window-local point, as WindowServer stamps a real click, not the screen point; an app that reads that field (WeChat 4.1 on a two-display Mac) clicked off by the window's origin; upstream [#5492](https://github.com/trycua/cua/pull/5492) stamps it on macOS 27 only, and this patch drops that version gate | [#6126](https://github.com/trycua/cua/pull/6126) |
 | macOS: a background pixel click on a text input whose AXPress leaves it unfocused (a Qt line edit takes the press as a no-op) gives it the keyboard focus, as a real click does | [#6118](https://github.com/trycua/cua/pull/6118) |
 | Linux: a launch settles on the window of a process its launcher forked (LibreOffice's oosplash), and a command line matches a window class by its program, not its last argument | [#6119](https://github.com/trycua/cua/pull/6119) |
 | Linux: with no desktop variable set, a session whose GNOME Shell owns its bus name counts as GNOME, so the advertisement is IsEnabled only and Orca does not start | [#6120](https://github.com/trycua/cua/pull/6120) |
@@ -38,6 +34,8 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | macOS: background `type_text` and `press_key` with `locked_input:true` send pid-routed keys while the screen is locked, unverified; every other route still refuses with `screen_locked` | [#6158](https://github.com/trycua/cua/pull/6158) |
 | macOS: the key-window records `type_text` posts never defocus the window they make key, so a Qt window without a focused accessibility element (WeChat) keeps its focused field | [#6156](https://github.com/trycua/cua/pull/6156) |
 | Linux: a pid whose app did not answer `GetChildren` gets `app_unresponsive` at once, without a walk, until a `GetState` probe to its root gets a reply | fork only |
+| Windows: a service-mode daemon claims its pipe name with its first instance (`FILE_FLAG_FIRST_PIPE_INSTANCE`), as an embedded one already did, so it never joins a name another server holds | fork only, upstream pull request pending |
+| Windows: the daemon's clients refuse a named pipe whose server process runs as another Windows account | fork only, upstream pull request pending |
 
 Before a box image moves its cua-driver pin to `dev`:
 
@@ -48,6 +46,10 @@ Before a box image moves its cua-driver pin to `dev`:
 
 Upstream already:
 
+- never borrow keycode 8 for a Linux text character ([#5595](https://github.com/trycua/cua/pull/5595), from [#5592](https://github.com/trycua/cua/pull/5592));
+- stop the Linux focus restore when the saved window is gone ([#5596](https://github.com/trycua/cua/pull/5596), from [#5593](https://github.com/trycua/cua/pull/5593));
+- paint the macOS cursor overlay as a region around the cursors, not a full-screen frame ([#5650](https://github.com/trycua/cua/pull/5650), from [#5640](https://github.com/trycua/cua/pull/5640));
+- restore the X11 active window by bouncing the core focus when only the window manager's record moved ([#5651](https://github.com/trycua/cua/pull/5651), from [#5642](https://github.com/trycua/cua/pull/5642));
 - skip the Space snapshot in the macOS background gate and the window-change detector ([#5712](https://github.com/trycua/cua/pull/5712), salvaged from [#5641](https://github.com/trycua/cua/pull/5641));
 - route keys for a popup an MPX click opened through the master keyboard of the session that clicked ([#5652](https://github.com/trycua/cua/pull/5652), from [#5601](https://github.com/trycua/cua/pull/5601));
 - leave the driver's own overlay windows out of Windows `list_windows` ([#5566](https://github.com/trycua/cua/pull/5566), from [#5413](https://github.com/trycua/cua/pull/5413));
