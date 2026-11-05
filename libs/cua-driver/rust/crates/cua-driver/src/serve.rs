@@ -1852,17 +1852,16 @@ pub async fn run_serve(
             }
         }
 
-        // All daemons use the current-user descriptor. Embedded daemons also
-        // reserve the pipe name with their first instance.
-        let first_pipe_instance = embedded && first_pipe;
+        // All daemons use the current-user descriptor and reserve the pipe
+        // name with their first instance, so a name another server holds fails.
         let created = if sec_attrs_ptr.is_null() {
             ServerOptions::new()
-                .first_pipe_instance(first_pipe_instance)
+                .first_pipe_instance(first_pipe)
                 .create(socket_path)
         } else {
             unsafe {
                 ServerOptions::new()
-                    .first_pipe_instance(first_pipe_instance)
+                    .first_pipe_instance(first_pipe)
                     .create_with_security_attributes_raw(socket_path, sec_attrs_ptr)
             }
         };
