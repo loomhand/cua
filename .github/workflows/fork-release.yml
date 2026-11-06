@@ -69,14 +69,6 @@ jobs:
           path: libs/cua-driver/rust/dist/*.tar.gz
 
   macos:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: arm64
-            target: aarch64-apple-darwin
-          - arch: x86_64
-            target: x86_64-apple-darwin
     # macos-26 carries the macOS 26 SDK that screencapturekit needs, as upstream's release build notes.
     runs-on: macos-26
     env:
@@ -89,26 +81,32 @@ jobs:
       - name: Build (release)
         working-directory: libs/cua-driver/rust
         run: |
-          rustup target add ${{ matrix.target }}
-          cargo build --locked -p cua-driver -p cursor-theme-cli --release --target ${{ matrix.target }}
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --locked -p cua-driver -p cursor-theme-cli --release --target "$target"
+          done
 
       - name: Package
         working-directory: libs/cua-driver/rust
         run: |
           set -eu
-          stage="cua-driver-${GITHUB_REF_NAME}-macos-${{ matrix.arch }}"
-          out="target/${{ matrix.target }}/release"
-          mkdir -p "dist/$stage"
-          cp "$out/cua-driver" "$out/cua-cursor-theme" "dist/$stage/"
-          cp ../../../LICENSE.md "dist/$stage/LICENSE"
-          cp THIRD_PARTY_NOTICES.md "dist/$stage/"
-          tar -czf "dist/$stage.tar.gz" -C dist "$stage"
-          lipo -info "dist/$stage/cua-driver"
+          for pair in arm64:aarch64-apple-darwin x86_64:x86_64-apple-darwin; do
+            arch="${pair%%:*}"
+            target="${pair#*:}"
+            stage="cua-driver-${GITHUB_REF_NAME}-macos-${arch}"
+            out="target/${target}/release"
+            mkdir -p "dist/$stage"
+            cp "$out/cua-driver" "$out/cua-cursor-theme" "dist/$stage/"
+            cp ../../../LICENSE.md "dist/$stage/LICENSE"
+            cp THIRD_PARTY_NOTICES.md "dist/$stage/"
+            tar -czf "dist/$stage.tar.gz" -C dist "$stage"
+            lipo -info "dist/$stage/cua-driver"
+          done
 
       - name: Upload
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: dist-macos-${{ matrix.arch }}
+          name: dist-macos
           path: libs/cua-driver/rust/dist/*.tar.gz
 
   windows:
