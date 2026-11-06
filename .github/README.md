@@ -37,6 +37,7 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | Windows: a service-mode daemon claims its pipe name with its first instance (`FILE_FLAG_FIRST_PIPE_INSTANCE`), as an embedded one already did, so it never joins a name another server holds | fork only, upstream pull request pending |
 | Windows: the daemon's clients refuse a named pipe whose server process runs as another Windows account | fork only, upstream pull request pending |
 | macOS: after a launch with `urls`, arguments or a new instance, the late-activation watchdog stops once the driver itself activates an app, so a `bring_to_front` right after the launch is not undone | fork only |
+| Windows: `type_text`'s tail repair and read-back accept text that replaced a selection, so the repair no longer types a shared end again ("abcc"), and an unchanged value is reported as dropped or typed over an identical selection, not as a firm drop | fork only |
 
 Before a box image moves its cua-driver pin to `dev`:
 
