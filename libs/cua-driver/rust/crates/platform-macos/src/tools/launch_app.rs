@@ -412,16 +412,21 @@ impl Tool for LaunchAppTool {
                     if slow_launch_path {
                         let launched_pid = *pid;
                         let prior_pid = prior;
-                        tokio::spawn(async move {
-                            let _lease = crate::focus_steal::FocusStealPreventer::begin_suppression(
+                        let hold = crate::window_change_detector::LaunchHold::new(
+                            crate::focus_steal::FocusStealPreventer::begin_suppression(
                                 Some(launched_pid),
                                 prior_pid,
                                 "LaunchAppTool.watchdog",
-                            );
+                            ),
+                        );
+                        tokio::spawn(async move {
                             let mut late_activations = 0u32;
                             for _ in 0..32 {
                                 // 32 × 250ms = 8s
                                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                                if !hold.held() {
+                                    break;
+                                }
                                 if crate::apps::frontmost_pid() == Some(launched_pid) {
                                     late_activations += 1;
                                     let _ = crate::apps::activate_pid(prior_pid);
