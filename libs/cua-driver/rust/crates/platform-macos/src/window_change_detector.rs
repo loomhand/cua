@@ -247,6 +247,7 @@ struct Tail {
 }
 
 static TAIL: Mutex<Option<Tail>> = Mutex::new(None);
+static LAUNCH_HOLD: Mutex<Option<Tail>> = Mutex::new(None);
 static NEXT_TAIL_ID: AtomicU64 = AtomicU64::new(1);
 
 /// A change a detached tail saw after its action had returned.
@@ -278,14 +279,46 @@ pub fn end_tail() {
 /// the guard was armed, so it never undoes an activation the driver asked for.
 static INTENTIONAL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Record an activation the driver asked for.
+/// Record an activation the driver asked for, ending the last launch's hold.
 pub fn note_intentional_activation() {
     INTENTIONAL_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let hold = lock(&LAUNCH_HOLD).take();
+    drop(hold);
 }
 
 /// The current intentional-activation epoch.
 pub fn intentional_epoch() -> u64 {
     INTENTIONAL_EPOCH.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// A launch watchdog's focus-steal lease, held until the watchdog drops it or
+/// the driver makes an app frontmost ([`note_intentional_activation`]).
+pub struct LaunchHold(u64);
+
+impl LaunchHold {
+    pub fn new(lease: SuppressionLease) -> Self {
+        let id = NEXT_TAIL_ID.fetch_add(1, Ordering::Relaxed);
+        let previous = lock(&LAUNCH_HOLD).replace(Tail {
+            id,
+            _lease: Some(lease),
+        });
+        drop(previous);
+        Self(id)
+    }
+
+    /// Whether no intentional activation has ended this hold.
+    pub fn held(&self) -> bool {
+        lock(&LAUNCH_HOLD)
+            .as_ref()
+            .is_some_and(|hold| hold.id == self.0)
+    }
+}
+
+impl Drop for LaunchHold {
+    fn drop(&mut self) {
+        let mine = lock(&LAUNCH_HOLD).take_if(|hold| hold.id == self.0);
+        drop(mine);
+    }
 }
 
 /// Take a late change recorded by a detached tail, if it is recent.
@@ -1123,6 +1156,14 @@ mod tests {
             "\n\n🪟 After the previous action returned, it opened new window(s): App (\"Save\")."
         );
         assert!(take_late().is_none(), "reported once");
+    }
+
+    #[test]
+    fn an_intentional_activation_ends_the_launch_hold() {
+        let hold = LaunchHold::new(focus_steal::begin_suppression(Some(-1), -2, "test.hold"));
+        assert!(hold.held());
+        note_intentional_activation();
+        assert!(!hold.held());
     }
 
     /// The next action ends the previous tail before it acts, so a lingering
