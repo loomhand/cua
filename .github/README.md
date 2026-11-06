@@ -36,6 +36,7 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | Linux: a pid whose app did not answer `GetChildren` gets `app_unresponsive` at once, without a walk, until a `GetState` probe to its root gets a reply | fork only |
 | Windows: a service-mode daemon claims its pipe name with its first instance (`FILE_FLAG_FIRST_PIPE_INSTANCE`), as an embedded one already did, so it never joins a name another server holds | fork only, upstream pull request pending |
 | Windows: the daemon's clients refuse a named pipe whose server process runs as another Windows account | fork only, upstream pull request pending |
+| macOS: after a launch with `urls`, arguments or a new instance, the late-activation watchdog stops once the driver itself activates an app, so a `bring_to_front` right after the launch is not undone | fork only |
 
 Before a box image moves its cua-driver pin to `dev`:
 
