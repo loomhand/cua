@@ -69,8 +69,7 @@ jobs:
           path: libs/cua-driver/rust/dist/*.tar.gz
 
   macos:
-    # macos-26 carries the macOS 26 SDK that screencapturekit needs, as upstream's release build notes.
-    runs-on: macos-26
+    runs-on: macos-15
     env:
       CUA_TELEMETRY: "0"
       MACOSX_DEPLOYMENT_TARGET: "13.0"
