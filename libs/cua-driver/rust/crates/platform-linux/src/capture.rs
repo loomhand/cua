@@ -27,7 +27,9 @@ use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection as _;
-use x11rb::protocol::xproto::{Format, ImageOrder, Setup, VisualClass, Visualtype};
+use x11rb::protocol::xproto::{
+    Format, GetGeometryReply, ImageOrder, Rectangle, Setup, VisualClass, Visualtype,
+};
 
 /// Max edge length accepted for a single SHM/XGetImage capture (px).
 const MAX_CAPTURE_DIM: u32 = 16_384;
@@ -633,7 +635,11 @@ impl XShmSession {
         let w = u32::from(geom.width);
         let h = u32::from(geom.height);
         let layout = self.pixels.packed_layout(w, h, geom.depth)?;
-        let need = layout.len;
+        let part = on_screen_part(&self.conn, window, &geom)?;
+        let part_layout =
+            self.pixels
+                .packed_layout(u32::from(part.width), u32::from(part.height), geom.depth)?;
+        let need = part_layout.len;
 
         self.ensure_buffer(need)?;
         let (seg, map_len) = {
@@ -651,10 +657,10 @@ impl XShmSession {
             .conn
             .shm_get_image(
                 window,
-                0,
-                0,
-                geom.width,
-                geom.height,
+                part.x,
+                part.y,
+                part.width,
+                part.height,
                 !0u32,
                 u8::from(ImageFormat::Z_PIXMAP),
                 seg,
@@ -673,10 +679,10 @@ impl XShmSession {
         if size != need {
             bail!(
                 "shm_get_image size {size} != expected {need} ({}x{}, depth {}, stride {})",
-                w,
-                h,
+                part.width,
+                part.height,
                 reply.depth,
-                layout.stride
+                part_layout.stride
             );
         }
         if size > map_len {
@@ -688,7 +694,11 @@ impl XShmSession {
                 .buffer
                 .as_ref()
                 .ok_or_else(|| anyhow!("SHM buffer missing after get_image"))?;
-            buf.map[..size].to_vec()
+            if (part.width, part.height) == (geom.width, geom.height) {
+                buf.map[..size].to_vec()
+            } else {
+                pad_to_window(&buf.map[..size], part, part_layout, layout)
+            }
         };
         Ok(RawFrame {
             data,
@@ -701,6 +711,61 @@ impl XShmSession {
                 })?,
         })
     }
+}
+
+fn on_screen_part(
+    conn: &x11rb::rust_connection::RustConnection,
+    window: u32,
+    geom: &GetGeometryReply,
+) -> Result<Rectangle> {
+    use x11rb::protocol::xproto::ConnectionExt as _;
+    let origin = conn
+        .translate_coordinates(window, geom.root, 0, 0)
+        .map_err(|e| anyhow!("translate_coordinates request: {e}"))?;
+    let screen = conn
+        .get_geometry(geom.root)
+        .map_err(|e| anyhow!("root get_geometry request: {e}"))?;
+    let origin = origin
+        .reply()
+        .map_err(|e| anyhow!("translate_coordinates reply: {e}"))?;
+    let screen = screen
+        .reply()
+        .map_err(|e| anyhow!("root get_geometry reply: {e}"))?;
+    clip_to_screen(
+        (origin.dst_x, origin.dst_y),
+        (geom.width, geom.height),
+        (screen.width, screen.height),
+    )
+    .ok_or_else(|| anyhow!("window 0x{window:x} is entirely off-screen"))
+}
+
+fn clip_to_screen(origin: (i16, i16), size: (u16, u16), screen: (u16, u16)) -> Option<Rectangle> {
+    let x0 = (-i32::from(origin.0)).max(0);
+    let y0 = (-i32::from(origin.1)).max(0);
+    let x1 = i32::from(size.0).min(i32::from(screen.0) - i32::from(origin.0));
+    let y1 = i32::from(size.1).min(i32::from(screen.1) - i32::from(origin.1));
+    (x1 > x0 && y1 > y0).then(|| Rectangle {
+        x: x0 as i16,
+        y: y0 as i16,
+        width: (x1 - x0) as u16,
+        height: (y1 - y0) as u16,
+    })
+}
+
+fn pad_to_window(
+    data: &[u8],
+    part: Rectangle,
+    part_layout: PackedLayout,
+    layout: PackedLayout,
+) -> Vec<u8> {
+    let mut out = vec![0; layout.len];
+    let row = usize::from(part.width) * layout.bytes_per_pixel;
+    let left = part.x as usize * layout.bytes_per_pixel;
+    for (y, src) in data.chunks(part_layout.stride).enumerate() {
+        let dst = (part.y as usize + y) * layout.stride + left;
+        out[dst..dst + row].copy_from_slice(&src[..row]);
+    }
+    out
 }
 
 struct RawFrame {
@@ -890,17 +955,21 @@ impl XGetImageSession {
         let w = u32::from(geom.width);
         let h = u32::from(geom.height);
         let layout = self.pixels.packed_layout(w, h, geom.depth)?;
-        let need = layout.len;
+        let part = on_screen_part(&self.conn, window, &geom)?;
+        let part_layout =
+            self.pixels
+                .packed_layout(u32::from(part.width), u32::from(part.height), geom.depth)?;
+        let need = part_layout.len;
 
         let img = self
             .conn
             .get_image(
                 ImageFormat::Z_PIXMAP,
                 window,
-                0,
-                0,
-                geom.width,
-                geom.height,
+                part.x,
+                part.y,
+                part.width,
+                part.height,
                 !0u32,
             )
             .map_err(|e| anyhow!("get_image request: {e}"))?
@@ -915,13 +984,17 @@ impl XGetImageSession {
             bail!(
                 "XGetImage data length {} != expected {need} ({}x{})",
                 img.data.len(),
-                w,
-                h
+                part.width,
+                part.height
             );
         }
 
         Ok(RawFrame {
-            data: img.data,
+            data: if (part.width, part.height) == (geom.width, geom.height) {
+                img.data
+            } else {
+                pad_to_window(&img.data, part, part_layout, layout)
+            },
             w,
             h,
             decoder: self.pixels.decoder(w, h, img.depth, img.visual, |visual| {
@@ -1462,6 +1535,67 @@ mod tests {
         )
         .expect("fallback succeeds");
         assert_eq!(result, png);
+    }
+
+    #[test]
+    fn window_partly_off_screen_captures_with_the_hidden_part_black() {
+        use std::io::{BufRead, BufReader};
+        use x11rb::protocol::xproto::{ConnectionExt as _, CreateWindowAux, WindowClass};
+
+        let mut child = Command::new("Xvfb")
+            .args([
+                "-displayfd",
+                "1",
+                "-screen",
+                "0",
+                "640x480x24",
+                "-nolisten",
+                "tcp",
+            ])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("install xvfb to run capture tests");
+        let stdout = child.stdout.take().unwrap();
+        let _server = XvfbServer { child: Some(child) };
+        let mut number = String::new();
+        BufReader::new(stdout).read_line(&mut number).unwrap();
+        let display = format!(":{}", number.trim());
+        let (conn, screen_num) =
+            x11rb::rust_connection::RustConnection::connect(Some(&display)).unwrap();
+        let screen = &conn.setup().roots[screen_num];
+        let window = conn.generate_id().unwrap();
+        conn.create_window(
+            screen.root_depth,
+            window,
+            screen.root,
+            -20,
+            450,
+            67,
+            43,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            screen.root_visual,
+            &CreateWindowAux::new().background_pixel(0x0017_5ba8),
+        )
+        .unwrap();
+        conn.map_window(window).unwrap().check().unwrap();
+        let mut shm = XShmSession::connect(display.clone()).unwrap();
+        let mut xget = XGetImageSession::connect(display).unwrap();
+        for frame in [
+            shm.capture_raw(window.into()).unwrap(),
+            xget.capture_raw(window.into()).unwrap(),
+        ] {
+            let png = raw_frame_png(frame);
+            assert_eq!(
+                cua_driver_core::image_utils::png_dimensions(&png).unwrap(),
+                (67, 43)
+            );
+            let rgba = decode_png_rgba(&png);
+            let pixel = |x: usize, y: usize| rgba[(y * 67 + x) * 4..(y * 67 + x) * 4 + 4].to_vec();
+            assert_eq!(pixel(30, 10), [0x17, 0x5b, 0xa8, 0xff]);
+            assert_eq!(pixel(5, 10), [0, 0, 0, 0xff]);
+            assert_eq!(pixel(30, 40), [0, 0, 0, 0xff]);
+        }
     }
 
     struct LiveFixture {
