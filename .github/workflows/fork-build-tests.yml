@@ -1,0 +1,66 @@
+name: "Fork: Build tests (scratch)"
+
+on:
+  push:
+    branches: ["cmgs/build-*"]
+
+permissions:
+  contents: read
+
+env:
+  CUA_TELEMETRY: "0"
+  CUA_DRIVER_RS_TELEMETRY_ENABLED: "false"
+  CUA_DRIVER_RS_UPDATE_CHECK: "false"
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: platform-macos and core unit tests
+        working-directory: libs/cua-driver/rust
+        env:
+          CUA_TEST_ALLOW_CLIPBOARD: "1"
+        run: |
+          cargo test --locked -p platform-macos --lib
+          cargo test --locked -p cua-driver-core --lib
+          cargo build --locked -p cua-driver --release
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: cua-driver-macos
+          path: libs/cua-driver/rust/target/release/cua-driver
+
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: core, platform-windows and named-pipe tests
+        working-directory: libs/cua-driver/rust
+        env:
+          CUA_TEST_ALLOW_CLIPBOARD: "1"
+          CUA_TEST_REQUIRE_DRIVER_BIN: "1"
+          CUA_PROXY_RECOVERY_IDLE_SECONDS: "1"
+        run: |
+          $ErrorActionPreference = "Continue"
+          $failed = @()
+          cargo test --locked -p cua-driver-core --lib
+          if ($LASTEXITCODE -ne 0) { $failed += "core" }
+          cargo test --locked -p platform-windows --lib
+          if ($LASTEXITCODE -ne 0) { $failed += "platform-windows" }
+          cargo test --locked -p cua-driver --bin cua-driver proxy::tests::
+          if ($LASTEXITCODE -ne 0) { $failed += "proxy" }
+          cargo test --locked -p cua-driver --test named_pipe_instance_recovery_test --test status_pid_file_cli_test --test protocol_proxy_recovery_test -- --nocapture
+          if ($LASTEXITCODE -ne 0) { $failed += "pipe-integration" }
+          if (Test-Path crates/cua-driver/tests/named_pipe_name_claim_test.rs) {
+            cargo test --locked -p cua-driver --test named_pipe_name_claim_test -- --nocapture
+            if ($LASTEXITCODE -ne 0) { $failed += "name-claim" }
+          }
+          cargo build --locked -p cua-driver --release
+          if ($LASTEXITCODE -ne 0) { $failed += "build" }
+          if ($failed.Count -gt 0) { throw "failed: $($failed -join ', ')" }
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: cua-driver-windows-x64
+          path: libs/cua-driver/rust/target/release/cua-driver.exe
