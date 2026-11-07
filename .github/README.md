@@ -36,10 +36,11 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | Linux: a pid whose app did not answer `GetChildren` gets `app_unresponsive` at once, without a walk, until a `GetState` probe to its root gets a reply | fork only |
 | Windows: a service-mode daemon claims its pipe name with its first instance (`FILE_FLAG_FIRST_PIPE_INSTANCE`), as an embedded one already did, so it never joins a name another server holds | fork only, upstream pull request pending |
 | Windows: the daemon's clients refuse a named pipe whose server process runs as another Windows account | fork only, upstream pull request pending |
-| macOS: after a launch with `urls`, arguments or a new instance, the late-activation watchdog stops once the driver itself activates an app, so a `bring_to_front` right after the launch is not undone | fork only |
 | Windows: `type_text`'s tail repair and read-back accept text that replaced a selection, so the repair no longer types a shared end again ("abcc"), and an unchanged value is reported as dropped or typed over an identical selection, not as a firm drop | fork only |
 | all platforms: `type_text` takes `literal`, which types the text without stripping a trailing run of unbalanced agent-protocol closing tags, for a client that splits a text into lines and checks the whole text once | fork only |
 | Windows: no-element `type_text` writes through the focused UIA document at its caret or selection (one selection, at most 1M characters), with read-back and a verified caret, instead of Unicode packets that Windows 11 Notepad collapsed; the write leaves no modified marker or undo step and skips Autocorrect | fork only |
+| Linux: XTest typing (desktop and foreground `type_text`) turns Caps Lock off for the text and back on after it, so a locked Caps Lock no longer inverts the text's case | fork only, upstream pull request pending |
+| Linux: a window capture reads only the part of the window on the screen and pads the rest black, so a window past the screen edge no longer fails with BadMatch | fork only, upstream pull request pending |
 
 Before a box image moves its cua-driver pin to `dev`:
 
@@ -50,6 +51,7 @@ Before a box image moves its cua-driver pin to `dev`:
 
 Upstream already:
 
+- stop the macOS launch watchdog once the driver itself activates an app ([#6803](https://github.com/trycua/cua/pull/6803)'s focus arbiter, which replaced the fork's launch hold);
 - never borrow keycode 8 for a Linux text character ([#5595](https://github.com/trycua/cua/pull/5595), from [#5592](https://github.com/trycua/cua/pull/5592));
 - stop the Linux focus restore when the saved window is gone ([#5596](https://github.com/trycua/cua/pull/5596), from [#5593](https://github.com/trycua/cua/pull/5593));
 - paint the macOS cursor overlay as a region around the cursors, not a full-screen frame ([#5650](https://github.com/trycua/cua/pull/5650), from [#5640](https://github.com/trycua/cua/pull/5640));
