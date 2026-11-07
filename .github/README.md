@@ -39,8 +39,8 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | Windows: `type_text`'s tail repair and read-back accept text that replaced a selection, so the repair no longer types a shared end again ("abcc"), and an unchanged value is reported as dropped or typed over an identical selection, not as a firm drop | fork only |
 | all platforms: `type_text` takes `literal`, which types the text without stripping a trailing run of unbalanced agent-protocol closing tags, for a client that splits a text into lines and checks the whole text once | fork only |
 | Windows: no-element `type_text` writes through the focused UIA document at its caret or selection (one selection, at most 1M characters), with read-back and a verified caret, instead of Unicode packets that Windows 11 Notepad collapsed; the write leaves no modified marker or undo step and skips Autocorrect | fork only |
-| Linux: XTest typing (desktop and foreground `type_text`) turns Caps Lock off for the text and back on after it, so a locked Caps Lock no longer inverts the text's case | fork only, upstream pull request pending |
-| Linux: a window capture reads only the part of the window on the screen and pads the rest black, so a window past the screen edge no longer fails with BadMatch | fork only, upstream pull request pending |
+| Linux: XTest typing (desktop and foreground `type_text`) turns Caps Lock off for the text and back on after it, so a locked Caps Lock no longer inverts the text's case | [#6817](https://github.com/trycua/cua/pull/6817) |
+| Linux: a window capture reads only the part of the window on the screen and pads the rest black, so a window past the screen edge no longer fails with BadMatch | the same fix is third-party [#5742](https://github.com/trycua/cua/pull/5742) |
 
 Before a box image moves its cua-driver pin to `dev`:
 
