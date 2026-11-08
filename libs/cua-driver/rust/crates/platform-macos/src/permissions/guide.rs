@@ -103,13 +103,6 @@ pub fn for_app(text: &str, app: &str) -> String {
     text.replace(APP_NAME, app)
 }
 
-pub fn host_app_name() -> String {
-    i32::try_from(std::process::id())
-        .ok()
-        .and_then(crate::apps::bundle_name_for_pid)
-        .unwrap_or_else(|| APP_NAME.to_owned())
-}
-
 /// What the guide must do after reading a status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuideEffect {
@@ -573,11 +566,6 @@ mod tests {
             "In System Settings, turn on the switch next to Host App."
         );
         assert_eq!(for_app(TILE_NAME, "Host App"), "Host App");
-    }
-
-    #[test]
-    fn outside_an_app_bundle_the_host_is_cua_driver() {
-        assert_eq!(host_app_name(), APP_NAME);
     }
 
     #[test]

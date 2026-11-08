@@ -163,9 +163,53 @@ fn env_off(key: &str) -> bool {
 fn app_bundle_path() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
-    exe.ancestors()
+    enclosing_app(&exe)
+}
+
+fn enclosing_app(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    path.ancestors()
         .find(|p| p.extension().and_then(|e| e.to_str()) == Some("app"))
         .map(std::path::Path::to_path_buf)
+}
+
+pub(crate) fn host_app_name() -> String {
+    app_bundle_path()
+        .and_then(|bundle| unsafe { bundle_shown_name(&bundle) })
+        .unwrap_or_else(|| guide::APP_NAME.to_owned())
+}
+
+unsafe fn bundle_shown_name(bundle: &std::path::Path) -> Option<String> {
+    let ns_bundle: *mut AnyObject =
+        msg_send![class!(NSBundle), bundleWithPath: ns_string(bundle.to_str()?)];
+    if ns_bundle.is_null() {
+        return None;
+    }
+    ["CFBundleDisplayName", "CFBundleName"]
+        .into_iter()
+        .find_map(|key| {
+            let value: *mut AnyObject =
+                msg_send![ns_bundle, objectForInfoDictionaryKey: ns_string(key)];
+            string_value(value)
+        })
+}
+
+unsafe fn string_value(value: *mut AnyObject) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    let is_string: bool = msg_send![value, isKindOfClass: class!(NSString)];
+    if !is_string {
+        return None;
+    }
+    let utf8: *const std::ffi::c_char = msg_send![value, UTF8String];
+    if utf8.is_null() {
+        return None;
+    }
+    let text = std::ffi::CStr::from_ptr(utf8)
+        .to_string_lossy()
+        .trim()
+        .to_owned();
+    (!text.is_empty()).then_some(text)
 }
 
 fn running_inside_app_bundle() -> bool {
@@ -237,7 +281,7 @@ fn ptr(u: usize) -> *mut AnyObject {
 }
 
 unsafe fn run_window(machine: GuideMachine, hooks: PanelHooks) -> Option<PanelOutcome> {
-    let app_name = guide::host_app_name();
+    let app_name = host_app_name();
     let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
     let _: bool = msg_send![app, setActivationPolicy: 1i64];
     let _: () = msg_send![app, finishLaunching];
@@ -968,6 +1012,64 @@ mod tests {
             );
         }
         std::env::remove_var("CUA_DRIVER_RS_PERMISSIONS_PANEL");
+    }
+
+    #[test]
+    fn the_host_is_the_app_that_encloses_the_executable() {
+        for exe in [
+            "/Applications/Host.app/Contents/MacOS/cua-driver",
+            "/Applications/Host.app/Contents/Resources/cua-driver",
+            "/Applications/Host.app/Contents/Resources/bin/cua-driver",
+        ] {
+            assert_eq!(
+                enclosing_app(std::path::Path::new(exe)),
+                Some(std::path::PathBuf::from("/Applications/Host.app")),
+                "{exe}"
+            );
+        }
+        assert_eq!(
+            enclosing_app(std::path::Path::new("/usr/local/bin/cua-driver")),
+            None
+        );
+        assert_eq!(host_app_name(), guide::APP_NAME);
+    }
+
+    #[test]
+    fn the_shown_name_is_the_localized_one_settings_lists() {
+        let root = tempfile::tempdir().unwrap();
+        let bundle = root.path().join("Host.app");
+        let contents = bundle.join("Contents");
+        std::fs::create_dir_all(contents.join("Resources/en.lproj")).unwrap();
+        std::fs::write(
+            contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.example.host</string>
+<key>CFBundleDevelopmentRegion</key><string>en</string>
+<key>CFBundleName</key><string>HostRaw</string>
+</dict></plist>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            unsafe { bundle_shown_name(&bundle) }.as_deref(),
+            Some("HostRaw")
+        );
+        let localized = root.path().join("Localized.app");
+        std::fs::create_dir_all(localized.join("Contents/Resources/en.lproj")).unwrap();
+        std::fs::copy(
+            contents.join("Info.plist"),
+            localized.join("Contents/Info.plist"),
+        )
+        .unwrap();
+        std::fs::write(
+            localized.join("Contents/Resources/en.lproj/InfoPlist.strings"),
+            "\u{FEFF}\"CFBundleDisplayName\" = \"Host App\";\n",
+        )
+        .unwrap();
+        assert_eq!(
+            unsafe { bundle_shown_name(&localized) }.as_deref(),
+            Some("Host App")
+        );
     }
 
     #[test]
