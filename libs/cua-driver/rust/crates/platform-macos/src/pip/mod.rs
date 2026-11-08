@@ -216,6 +216,7 @@ pub fn run_appkit_main_loop() {
         // the cursor overlay's NSApp setup.
         let _: bool = msg_send![app, setActivationPolicy: 1i64];
         let _: () = msg_send![app, finishLaunching];
+        crate::ax::main_thread::mark_main_queue_serviced();
         let _: () = msg_send![app, run];
     }
 }

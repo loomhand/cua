@@ -19,6 +19,8 @@ use std::{
     time::Duration,
 };
 
+static MAIN_QUEUE_SERVICED: AtomicBool = AtomicBool::new(false);
+
 #[link(name = "System", kind = "framework")]
 extern "C" {
     static _dispatch_main_q: u8;
@@ -33,6 +35,14 @@ extern "C" {
 /// it may run on `on_main_thread`'s thread.
 pub(crate) fn needs_main_queue(pid: i32, on_main_thread: bool) -> bool {
     pid == std::process::id() as i32 && !on_main_thread
+}
+
+pub(crate) fn mark_main_queue_serviced() {
+    MAIN_QUEUE_SERVICED.store(true, Ordering::Release);
+}
+
+pub(crate) fn main_queue_serviced() -> bool {
+    MAIN_QUEUE_SERVICED.load(Ordering::Acquire)
 }
 
 struct Request<F, T> {
@@ -69,6 +79,14 @@ where
     if !needs_main_queue(pid, on_main_thread) {
         return Ok(work());
     }
+    run_on_main_queue(timeout, work)
+}
+
+pub(crate) fn run_on_main_queue<F, T>(timeout: Duration, work: F) -> Result<T, RecvTimeoutError>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
     let (tx, rx) = mpsc::sync_channel(1);
     let cancelled = Arc::new(AtomicBool::new(false));
     let request = Box::new(Request {
