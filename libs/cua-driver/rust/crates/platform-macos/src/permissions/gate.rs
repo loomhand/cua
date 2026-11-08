@@ -655,7 +655,13 @@ fn wait_for_grants_with(
 }
 
 fn print_banner(missing: &[MissingPermission], open_settings: bool) {
-    print!("{}", banner_text(missing, open_settings));
+    print!(
+        "{}",
+        super::guide::for_app(
+            &banner_text(missing, open_settings),
+            &super::guide::host_app_name()
+        )
+    );
     let _ = std::io::stdout().flush();
 }
 

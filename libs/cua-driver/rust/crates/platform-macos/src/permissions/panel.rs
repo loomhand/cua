@@ -222,6 +222,7 @@ struct Session {
     machine: GuideMachine,
     hooks: PanelHooks,
     views: Views,
+    app: String,
     done_ticks: u32,
 }
 
@@ -236,6 +237,7 @@ fn ptr(u: usize) -> *mut AnyObject {
 }
 
 unsafe fn run_window(machine: GuideMachine, hooks: PanelHooks) -> Option<PanelOutcome> {
+    let app_name = guide::host_app_name();
     let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
     let _: bool = msg_send![app, setActivationPolicy: 1i64];
     let _: () = msg_send![app, finishLaunching];
@@ -271,7 +273,8 @@ unsafe fn run_window(machine: GuideMachine, hooks: PanelHooks) -> Option<PanelOu
     // Floating, so it stays above System Settings while the person works
     // there.
     let _: () = msg_send![window, setLevel: 3i64];
-    let _: () = msg_send![window, setTitle: ns_string(guide::WINDOW_TITLE)];
+    let _: () =
+        msg_send![window, setTitle: ns_string(&guide::for_app(guide::WINDOW_TITLE, &app_name))];
     let target = target_instance();
     let _: () = msg_send![window, setDelegate: target];
 
@@ -322,7 +325,7 @@ unsafe fn run_window(machine: GuideMachine, hooks: PanelHooks) -> Option<PanelOu
     let _: () = msg_send![step_view, addSubview: open_btn];
 
     let hint = label(
-        guide::DRAG_HINT,
+        &guide::for_app(guide::DRAG_HINT, &app_name),
         12.0,
         false,
         rect(PAD, 228.0, CONTENT_W, 18.0),
@@ -332,7 +335,11 @@ unsafe fn run_window(machine: GuideMachine, hooks: PanelHooks) -> Option<PanelOu
 
     let bundle = app_bundle_path();
     TILE_BUNDLE.with(|cell| *cell.borrow_mut() = bundle.clone());
-    let tile = drag_tile(rect(PAD, 250.0, CONTENT_W, TILE_H), bundle.as_deref());
+    let tile = drag_tile(
+        rect(PAD, 250.0, CONTENT_W, TILE_H),
+        bundle.as_deref(),
+        &app_name,
+    );
     let _: () = msg_send![step_view, addSubview: tile];
 
     let note = label("", 11.0, false, rect(PAD, 320.0, CONTENT_W, 32.0));
@@ -371,7 +378,7 @@ unsafe fn run_window(machine: GuideMachine, hooks: PanelHooks) -> Option<PanelOu
     let _: () = msg_send![check, setContentTintColor: green];
     let _: () = msg_send![done_view, addSubview: check];
     let done_title = label(
-        guide::DONE_TITLE,
+        &guide::for_app(guide::DONE_TITLE, &app_name),
         17.0,
         true,
         rect(PAD, 184.0, CONTENT_W, 24.0),
@@ -399,13 +406,14 @@ unsafe fn run_window(machine: GuideMachine, hooks: PanelHooks) -> Option<PanelOu
         how: how as usize,
         note: note as usize,
     };
-    render(&views, machine.step());
+    render(&views, machine.step(), &app_name);
     OUTCOME.with(|cell| *cell.borrow_mut() = None);
     SESSION.with(|cell| {
         *cell.borrow_mut() = Some(Session {
             machine,
             hooks,
             views,
+            app: app_name,
             done_ticks: 0,
         })
     });
@@ -441,7 +449,7 @@ unsafe fn run_window(machine: GuideMachine, hooks: PanelHooks) -> Option<PanelOu
 }
 
 /// Draw `step`: the step's words, or the finished view.
-unsafe fn render(views: &Views, step: GuideStep) {
+unsafe fn render(views: &Views, step: GuideStep, app: &str) {
     let done = step == GuideStep::Done;
     let _: () = msg_send![ptr(views.step_view), setHidden: done];
     let _: () = msg_send![ptr(views.done_view), setHidden: !done];
@@ -450,11 +458,15 @@ unsafe fn render(views: &Views, step: GuideStep) {
     }
     let copy = step.copy();
     let _: () = msg_send![ptr(views.counter), setStringValue: ns_string(copy.counter)];
-    let _: () = msg_send![ptr(views.title), setStringValue: ns_string(copy.title)];
-    let _: () = msg_send![ptr(views.why), setStringValue: ns_string(copy.why)];
-    let _: () = msg_send![ptr(views.how), setStringValue: ns_string(copy.how)];
-    let _: () = msg_send![ptr(views.note), setStringValue: ns_string(copy.note)];
-    let _: () = msg_send![ptr(views.window), setTitle: ns_string(guide::WINDOW_TITLE)];
+    let _: () =
+        msg_send![ptr(views.title), setStringValue: ns_string(&guide::for_app(copy.title, app))];
+    let _: () =
+        msg_send![ptr(views.why), setStringValue: ns_string(&guide::for_app(copy.why, app))];
+    let _: () =
+        msg_send![ptr(views.how), setStringValue: ns_string(&guide::for_app(copy.how, app))];
+    let _: () =
+        msg_send![ptr(views.note), setStringValue: ns_string(&guide::for_app(copy.note, app))];
+    let _: () = msg_send![ptr(views.window), setTitle: ns_string(&guide::for_app(guide::WINDOW_TITLE, app))];
 }
 
 // ── Timer, buttons, window close ─────────────────────────────────────────
@@ -495,7 +507,7 @@ fn tick() {
                     if step == GuideStep::ScreenRecording {
                         guide::write_resume_marker();
                     }
-                    render(&session.views, step);
+                    render(&session.views, step, &session.app);
                 },
                 GuideEffect::Request(permission) => {
                     if permission == MissingPermission::ScreenRecording {
@@ -618,7 +630,7 @@ fn target_class() -> &'static objc2::runtime::AnyClass {
 // drag puts the app bundle's file URL on the pasteboard, which System
 // Settings' privacy lists accept, the same as dragging the app from Finder.
 
-unsafe fn drag_tile(frame: NSRect, bundle: Option<&std::path::Path>) -> *mut AnyObject {
+unsafe fn drag_tile(frame: NSRect, bundle: Option<&std::path::Path>, app: &str) -> *mut AnyObject {
     let cls = tile_class();
     let tile: *mut AnyObject = msg_send![cls, alloc];
     let tile: *mut AnyObject = msg_send![tile, initWithFrame: frame];
@@ -656,7 +668,7 @@ unsafe fn drag_tile(frame: NSRect, bundle: Option<&std::path::Path>) -> *mut Any
     let _: () = msg_send![tile, addSubview: icon_view];
 
     let name = label(
-        guide::TILE_NAME,
+        &guide::for_app(guide::TILE_NAME, app),
         15.0,
         false,
         NSRect {
@@ -704,7 +716,7 @@ unsafe fn drag_tile(frame: NSRect, bundle: Option<&std::path::Path>) -> *mut Any
     let _: () = msg_send![tile, addSubview: drag];
 
     // Tooltip, and the role VoiceOver reads.
-    let _: () = msg_send![tile, setToolTip: ns_string(guide::DRAG_HINT)];
+    let _: () = msg_send![tile, setToolTip: ns_string(&guide::for_app(guide::DRAG_HINT, app))];
     tile
 }
 
