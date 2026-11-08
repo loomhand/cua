@@ -19,7 +19,6 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | macOS: bring_to_front returns at once when the exact window is already the focused frontmost window | [#5411](https://github.com/trycua/cua/pull/5411) |
 | macOS: bring_to_front skips activation only when AppKit agrees the target is frontmost | [#5411](https://github.com/trycua/cua/pull/5411) |
 | Windows: a desktop click that closes its own target window succeeds | [#5412](https://github.com/trycua/cua/pull/5412) |
-| macOS: capture the desktop with captureImage(in:) when there is no overlay to leave out | [#6028](https://github.com/trycua/cua/pull/6028) |
 | macOS and Windows: `click` with `verify_hit` fronts an element's window and posts a pixel click at its centre only when the hit test there finds the element; a Linux `click` refuses `verify_hit` as an unknown argument | RFC [#6031](https://github.com/trycua/cua/issues/6031) |
 | macOS: background text to kitty goes in as an AXValue write, which kitty commits to its pty without a key window; a blank kitty read-back is unverified, not zero delivered | [#6029](https://github.com/trycua/cua/pull/6029) |
 | macOS: find a window on another Space through the app's focused and main window before the remote-token probe, and note when an own-renderer app's off-Space pixels are stale | [#6030](https://github.com/trycua/cua/pull/6030) |
@@ -51,6 +50,7 @@ Before a box image moves its cua-driver pin to `dev`:
 
 Upstream already:
 
+- capture the macOS desktop with captureImage(in:) when there is no overlay to leave out ([#6881](https://github.com/trycua/cua/pull/6881), from [#6028](https://github.com/trycua/cua/pull/6028));
 - stop the macOS launch watchdog once the driver itself activates an app ([#6803](https://github.com/trycua/cua/pull/6803)'s focus arbiter, which replaced the fork's launch hold);
 - never borrow keycode 8 for a Linux text character ([#5595](https://github.com/trycua/cua/pull/5595), from [#5592](https://github.com/trycua/cua/pull/5592));
 - stop the Linux focus restore when the saved window is gone ([#5596](https://github.com/trycua/cua/pull/5596), from [#5593](https://github.com/trycua/cua/pull/5593));
