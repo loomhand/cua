@@ -1089,6 +1089,8 @@ pub(crate) type PointShapeChain = (
     bool,
 );
 
+type CentreHit = ((i32, i32), Option<bool>);
+
 /// Budget for the presence hit-test's UIA work. Short: a hover cursor that
 /// misses its deadline just falls back to the arrow.
 const POINT_SHAPE_TIMEOUT: Duration = Duration::from_millis(150);
@@ -1127,7 +1129,7 @@ pub(crate) fn point_shape_chain(sx: i32, sy: i32) -> Option<PointShapeChain> {
 pub(crate) fn element_centre_and_hit(
     target: crate::uia::snapshot::RetainedElement,
     at_centre: impl FnOnce(i32, i32) -> bool + Send + 'static,
-) -> Result<Option<((i32, i32), Option<bool>)>, ()> {
+) -> Result<Option<CentreHit>, ()> {
     run_uia_with_deadline(
         "verify_hit",
         HIT_CHECK_TIMEOUT,
