@@ -14,8 +14,11 @@ use core_graphics::{
 };
 use foreign_types::ForeignType;
 
+use crate::ax::main_thread::{main_queue_serviced, run_on_main_queue};
+
 const SCREEN_SHARING_BUNDLE_ID: &str = "com.apple.ScreenSharing";
 const SHIFT_KEY_CODE: u16 = 56;
+const LAYOUT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Default key down→up gap and inter-key pacing.
 const DEFAULT_KEY_GAP: std::time::Duration = std::time::Duration::from_millis(8);
@@ -923,7 +926,20 @@ fn target_key_code(
 }
 
 fn target_layout(screen_sharing: bool) -> Option<KeyLayout> {
-    (!screen_sharing).then(current_layout).flatten()
+    if screen_sharing {
+        return None;
+    }
+    let on_main_thread = objc2_foundation::MainThreadMarker::new().is_some();
+    if !layout_needs_main_queue(on_main_thread, main_queue_serviced()) {
+        return current_layout();
+    }
+    run_on_main_queue(LAYOUT_TIMEOUT, current_layout)
+        .ok()
+        .flatten()
+}
+
+fn layout_needs_main_queue(on_main_thread: bool, main_queue_serviced: bool) -> bool {
+    main_queue_serviced && !on_main_thread
 }
 
 /// The main typing keys (the ANSI/ISO block). The keypad is left out: its
@@ -1434,6 +1450,14 @@ mod tests {
             chord_key_code("a", &["cmd"], target_layout(true).as_ref()).unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn the_layout_is_read_on_the_main_queue_off_the_main_thread_while_appkit_runs() {
+        assert!(layout_needs_main_queue(false, true));
+        assert!(!layout_needs_main_queue(true, true));
+        assert!(!layout_needs_main_queue(false, false));
+        assert!(!layout_needs_main_queue(true, false));
     }
 
     /// Reads the host's real layout through Carbon: per-user state, so not in

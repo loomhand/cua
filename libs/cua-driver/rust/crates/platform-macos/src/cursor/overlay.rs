@@ -861,6 +861,7 @@ unsafe fn run_appkit(_cfg: CursorConfig, rx: std::sync::mpsc::Receiver<OverlayMs
     // ---- Render thread (60 fps) ----
     let layer_ptr = tile_layer as usize;
     let win_ptr = win as usize;
+    crate::ax::main_thread::mark_main_queue_serviced();
     RENDER_LOOP_RUNNING.store(true, Ordering::Release);
     std::thread::spawn(move || {
         render_loop(layer_ptr, win_ptr, rx, win_w, win_h);
