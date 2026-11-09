@@ -3801,6 +3801,7 @@ pub fn send_type_text_with_delay(xid: u64, text: &str, inter_char_ms: u64) -> Re
             pause_unless_zero(pacing.hold());
             conn.send_event(false, window, EventMask::KEY_RELEASE, release)?;
             conn.flush()?;
+            client.borrow_mut().mark_sent(keycode);
             pause_unless_zero(pacing.gap());
             sent.set(sent.get() + 1);
             if pacing.batch_boundary(sent.get()) {
@@ -3865,6 +3866,7 @@ fn type_text_xtest(conn: &RustConnection, text: &str, pacing: TypePacing) -> Res
                 conn.xtest_fake_input(KEY_RELEASE_EVENT, shift_kc, 0, x11rb::NONE, 0, 0, 0)?;
             }
             conn.flush()?;
+            client.borrow_mut().mark_sent(keycode);
             delivered.confirmed();
             pause_unless_zero(pacing.hold() + pacing.gap());
             sent.set(sent.get() + 1);
@@ -4621,6 +4623,7 @@ mod unpinged_client_tests {
                     conn.xtest_fake_input(kind, keycode, 0, x11rb::NONE, 0, 0, 0)?;
                 }
                 conn.flush()?;
+                client.borrow_mut().mark_sent(keycode);
                 Ok(())
             },
             || client.borrow_mut().release(),
@@ -5283,11 +5286,16 @@ impl<'a> TextClient<'a> {
         if !self.borrows(keycode) {
             return;
         }
-        self.last_borrowed_key = Instant::now();
         if let Some(window) = self.recipient() {
             if !self.sent.contains(&window) {
                 self.sent.push(window);
             }
+        }
+    }
+
+    fn mark_sent(&mut self, keycode: u8) {
+        if self.borrows(keycode) {
+            self.last_borrowed_key = Instant::now();
         }
     }
 
