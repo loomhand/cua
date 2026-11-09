@@ -4532,12 +4532,15 @@ mod admission_tests {
 }
 
 #[cfg(test)]
-mod unpinged_client_tests {
+mod spare_keycode_restore_tests {
     use super::*;
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
     use x11rb::protocol::xtest::ConnectionExt as _;
     use x11rb::protocol::Event;
+    use x11rb::wrapper::ConnectionExt as _;
+
+    const TEXT: &str = "\u{4e2d}\u{6587}\u{8f93}\u{5165}\u{6cd5}\u{6d4b}\u{8bd5}";
 
     struct Server(std::process::Child);
     impl Drop for Server {
@@ -4548,7 +4551,16 @@ mod unpinged_client_tests {
     }
 
     #[test]
-    fn a_client_without_ping_reads_its_spare_keycodes_before_they_are_restored() {
+    fn a_client_without_ping_looks_its_spare_keycodes_up_before_they_are_restored() {
+        assert_eq!(type_into_a_late_reader(false), TEXT);
+    }
+
+    #[test]
+    fn a_client_that_answers_the_ping_before_its_lookups_still_reads_them() {
+        assert_eq!(type_into_a_late_reader(true), TEXT);
+    }
+
+    fn type_into_a_late_reader(answers_ping: bool) -> String {
         let mut server = Server(
             Command::new("Xvfb")
                 .args(["-displayfd", "1", "-nolisten", "tcp"])
@@ -4579,58 +4591,100 @@ mod unpinged_client_tests {
                 &CreateWindowAux::new().event_mask(EventMask::KEY_PRESS),
             )
             .unwrap();
+        if answers_ping {
+            let atom = |name: &str| {
+                reader
+                    .intern_atom(false, name.as_bytes())
+                    .unwrap()
+                    .reply()
+                    .unwrap()
+                    .atom
+            };
+            let (protocols, ping) = (atom("WM_PROTOCOLS"), atom("_NET_WM_PING"));
+            reader
+                .change_property32(PropMode::REPLACE, win, protocols, AtomEnum::ATOM, &[ping])
+                .unwrap();
+        }
         reader.map_window(win).unwrap();
         reader
             .set_input_focus(InputFocus::PARENT, win, 0u32)
             .unwrap();
         reader.get_input_focus().unwrap().reply().unwrap();
 
-        let text = "\u{4e2d}\u{6587}\u{8f93}\u{5165}\u{6cd5}\u{6d4b}\u{8bd5}";
-        let count = text.chars().count();
+        let count = TEXT.chars().count();
         let typed = std::thread::spawn(move || {
-            let mut typed = String::new();
-            while typed.chars().count() < count {
-                let Event::KeyPress(press) = reader.wait_for_event().unwrap() else {
+            let mut keys = Vec::new();
+            let mut ready: Option<Instant> = None;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while ready.is_none_or(|at| at.elapsed() < Duration::from_millis(50)) {
+                assert!(
+                    Instant::now() < deadline,
+                    "the reader saw {} of {count} keys and was not ready within 5 s",
+                    keys.len()
+                );
+                let Some(event) = reader.poll_for_event().unwrap() else {
+                    sleep(Duration::from_millis(1));
                     continue;
                 };
-                if typed.is_empty() {
-                    sleep(Duration::from_millis(50));
+                match event {
+                    Event::KeyPress(press) => {
+                        keys.push(press.detail);
+                        if !answers_ping && keys.len() == count {
+                            ready = Some(Instant::now());
+                        }
+                    }
+                    Event::ClientMessage(mut pong) if answers_ping => {
+                        pong.response_type = CLIENT_MESSAGE_EVENT;
+                        pong.window = root;
+                        let mask =
+                            EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT;
+                        reader.send_event(false, root, mask, pong).unwrap();
+                        reader.flush().unwrap();
+                        if keys.len() == count && ready.is_none() {
+                            ready = Some(Instant::now());
+                        }
+                    }
+                    _ => {}
                 }
-                let keysym = reader
-                    .get_keyboard_mapping(press.detail, 1)
-                    .unwrap()
-                    .reply()
-                    .unwrap()
-                    .keysyms[0];
-                let ch = char::from_u32(keysym.wrapping_sub(0x0100_0000));
-                typed.push(ch.unwrap_or('?'));
             }
-            typed
+            keys.iter()
+                .map(|&keycode| {
+                    let keysym = reader
+                        .get_keyboard_mapping(keycode, 1)
+                        .unwrap()
+                        .reply()
+                        .unwrap()
+                        .keysyms[0];
+                    let ch = char::from_u32(keysym.wrapping_sub(0x0100_0000));
+                    ch.unwrap_or('?')
+                })
+                .collect::<String>()
         });
 
         let (conn, _) = RustConnection::connect(Some(&display)).unwrap();
         let mapping = conn.get_keyboard_mapping(8, 248).unwrap().reply().unwrap();
         let client = RefCell::new(TextClient::new(&conn, None));
         type_text_in_spare_batches(
-            text,
+            TEXT,
             &mapping,
             |ch, mapping| text_keycode(&mut client.borrow_mut(), mapping, ch),
             |keycode, _| {
                 client.borrow_mut().record_recipient(keycode);
-                let paced = client.borrow().pacing_for(keycode, TypePacing::default());
-                assert_eq!(paced.delay_ms, KEY_DELAY_MS);
+                let pacing = client.borrow().pacing_for(keycode, TypePacing::default());
+                assert_eq!(pacing.delay_ms, KEY_DELAY_MS);
                 for kind in [KEY_PRESS_EVENT, KEY_RELEASE_EVENT] {
                     conn.xtest_fake_input(kind, keycode, 0, x11rb::NONE, 0, 0, 0)?;
                 }
                 conn.flush()?;
                 client.borrow_mut().mark_sent(keycode);
+                pause_unless_zero(pacing.hold() + pacing.gap());
                 Ok(())
             },
             || client.borrow_mut().release(),
         )
         .unwrap();
 
-        assert_eq!(typed.join().unwrap(), text);
+        typed.join().unwrap()
     }
 }
 
