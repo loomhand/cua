@@ -34,8 +34,8 @@ const X_KEYCODE_OFFSET: u16 = 8;
 const MAX_EVDEV_KEY: u16 = 0xff;
 /// Unicode keysyms are the codepoint with this bit set (X11 keysym encoding).
 const UNICODE_KEYSYM_BASE: u32 = 0x0100_0000;
-/// How long the server gets to report the last emitted key through a raw
-/// event before the pair is torn down.
+/// How long the server gets to report the awaited key events as raw events
+/// before a confirm gives up.
 const DELIVERY_CONFIRM_TIMEOUT: Duration = Duration::from_millis(1500);
 const UNCONFIRMED_STEPS: usize = 8;
 
@@ -696,16 +696,17 @@ fn deliver(
             if confirm_at.binary_search(&sent).is_ok() {
                 let deadline = std::time::Instant::now() + DELIVERY_CONFIRM_TIMEOUT;
                 while read <= sent {
-                    let Some((_, _, device)) =
+                    let Some((_, _, deviceid)) =
                         next_raw_key(display, xi_opcode, &[slave_keyboard_id], deadline)
                     else {
                         bail!(
-                            "virtual keyboard: the X server read {read} of the first {} key events \
+                            "virtual keyboard: the X server read {} of the first {} characters \
                              within {DELIVERY_CONFIRM_TIMEOUT:?}; the rest was not sent",
-                            sent + 1
+                            characters(&steps[..read]),
+                            characters(&steps[..=sent])
                         );
                     };
-                    read += usize::from(device == slave_keyboard_id);
+                    read += usize::from(deviceid == slave_keyboard_id);
                 }
             }
         }
@@ -759,6 +760,20 @@ fn deliver(
     let _ = cursor_id;
     unsafe { x11::xlib::XCloseDisplay(display) };
     result
+}
+
+fn characters(steps: &[KeyStep]) -> usize {
+    let mut held = 0usize;
+    let mut done = 0;
+    for step in steps {
+        held = if step.press {
+            held + 1
+        } else {
+            held.saturating_sub(1)
+        };
+        done += usize::from(!step.press && held == 0);
+    }
+    done
 }
 
 fn confirm_points(steps: &[KeyStep]) -> Vec<usize> {
@@ -992,6 +1007,7 @@ mod tests {
             |_, _| unreachable!(),
         )
         .unwrap();
+        assert_eq!(characters(&steps), 80);
         let points = confirm_points(&steps);
         assert!(!points.is_empty());
         assert!(*points.last().unwrap() < steps.len() - 1);
