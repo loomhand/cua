@@ -45,6 +45,8 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | macOS: the permission guide, its banner and its status lines name the app the driver runs in (the shown name of the nearest enclosing .app), else Cua Driver | [#6985](https://github.com/trycua/cua/pull/6985) |
 | macOS: the permission guide opens at the left edge of the visible frame, clear of the Settings switches and the access prompt | [#6984](https://github.com/trycua/cua/pull/6984) |
 | Linux tests: the NO_AT_BRIDGE test waits for the spawned process's environment before it reads `/proc/<pid>/environ`, so it no longer fails with `left: None` (test only) | [#7067](https://github.com/trycua/cua/pull/7067) |
+| Linux: keys typed through borrowed spare keycodes to a client without `_NET_WM_PING` (xterm, Tk) are paced (10 ms hold, 10 ms gap), and the keycodes stay bound until 150 ms after its last such key, so the client looks them up before the keymap is restored | fork only, upstream pull request pending |
+| Linux: the virtual keyboard waits for the X server to read each run of about 8 key events before it sends more, so a CPU-starved server no longer overflows the 64-event evdev buffer and loses most of a text | fork only, upstream pull request pending |
 
 Before a box image moves its cua-driver pin to `dev`:
 
