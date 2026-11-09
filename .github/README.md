@@ -44,6 +44,7 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | Linux: a window whose frame matches the window geometry exactly, while no other frame does, is named without the 24 px margin, so cascaded same-size windows of one pid (Chrome) no longer fall back to a walk of the whole application | [#6983](https://github.com/trycua/cua/pull/6983) |
 | macOS: the permission guide, its banner and its status lines name the app the driver runs in (the shown name of the nearest enclosing .app), else Cua Driver | [#6985](https://github.com/trycua/cua/pull/6985) |
 | macOS: the permission guide opens at the left edge of the visible frame, clear of the Settings switches and the access prompt | [#6984](https://github.com/trycua/cua/pull/6984) |
+| Linux tests: the NO_AT_BRIDGE test waits for the spawned process's environment before it reads `/proc/<pid>/environ`, so it no longer fails with `left: None` (test only) | [#7067](https://github.com/trycua/cua/pull/7067) |
 
 Before a box image moves its cua-driver pin to `dev`:
 
