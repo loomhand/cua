@@ -100,7 +100,7 @@ impl TypePacing {
     }
 }
 const PING_TIMEOUT: Duration = Duration::from_secs(1);
-const UNPINGED_CLIENT_IDLE: Duration = Duration::from_millis(150);
+const SPARE_KEYCODE_IDLE: Duration = Duration::from_millis(150);
 static PING_SERIAL: AtomicU32 = AtomicU32::new(1);
 
 #[derive(Clone, Debug)]
@@ -5257,7 +5257,6 @@ struct TextClient<'a> {
     borrowed: Vec<RemappedKeycode<'a>>,
     sent: Vec<Window>,
     unanswered: Vec<Window>,
-    unpinged: bool,
     last_borrowed_key: Instant,
 }
 
@@ -5269,7 +5268,6 @@ impl<'a> TextClient<'a> {
             borrowed: Vec::new(),
             sent: Vec::new(),
             unanswered: Vec::new(),
-            unpinged: false,
             last_borrowed_key: Instant::now(),
         }
     }
@@ -5298,7 +5296,7 @@ impl<'a> TextClient<'a> {
     }
 
     fn pacing_for(&self, keycode: u8, pacing: TypePacing) -> TypePacing {
-        if self.unpinged && self.borrows(keycode) {
+        if self.borrows(keycode) {
             TypePacing {
                 delay_ms: pacing.delay_ms.max(KEY_DELAY_MS),
             }
@@ -5311,10 +5309,8 @@ impl<'a> TextClient<'a> {
         if self.unanswered.contains(&window) {
             return;
         }
-        match sync_client(self.conn, Some(window)) {
-            ClientSync::Unanswered => self.unanswered.push(window),
-            ClientSync::Unsupported => self.unpinged = true,
-            ClientSync::Confirmed => {}
+        if sync_client(self.conn, Some(window)) == ClientSync::Unanswered {
+            self.unanswered.push(window);
         }
     }
 
@@ -5323,8 +5319,8 @@ impl<'a> TextClient<'a> {
         for &window in &sent {
             self.ping(window);
         }
-        if self.unpinged && !sent.is_empty() {
-            sleep(UNPINGED_CLIENT_IDLE.saturating_sub(self.last_borrowed_key.elapsed()));
+        if !sent.is_empty() {
+            sleep(SPARE_KEYCODE_IDLE.saturating_sub(self.last_borrowed_key.elapsed()));
         }
         self.borrowed.clear();
         let unanswered = std::mem::take(&mut self.unanswered);
