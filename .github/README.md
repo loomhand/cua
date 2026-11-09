@@ -32,14 +32,18 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | macOS: a desktop capture wakes a display that is off and waits out the login shield, or refuses with `display_asleep`, instead of trapping in ScreenCaptureKit (SIGILL) | [#6157](https://github.com/trycua/cua/pull/6157) |
 | macOS: background `type_text` and `press_key` with `locked_input:true` send pid-routed keys while the screen is locked, unverified; every other route still refuses with `screen_locked` | [#6158](https://github.com/trycua/cua/pull/6158) |
 | macOS: the key-window records `type_text` posts never defocus the window they make key, so a Qt window without a focused accessibility element (WeChat) keeps its focused field | [#6156](https://github.com/trycua/cua/pull/6156) |
-| Linux: a pid whose app did not answer `GetChildren` gets `app_unresponsive` at once, without a walk, until a `GetState` probe to its root gets a reply | fork only |
-| Windows: a service-mode daemon claims its pipe name with its first instance (`FILE_FLAG_FIRST_PIPE_INSTANCE`), as an embedded one already did, so it never joins a name another server holds | fork only, upstream pull request pending |
-| Windows: the daemon's clients refuse a named pipe whose server process runs as another Windows account | fork only, upstream pull request pending |
-| Windows: `type_text`'s tail repair and read-back accept text that replaced a selection, so the repair no longer types a shared end again ("abcc"), and an unchanged value is reported as dropped or typed over an identical selection, not as a firm drop | fork only |
-| all platforms: `type_text` takes `literal`, which types the text without stripping a trailing run of unbalanced agent-protocol closing tags, for a client that splits a text into lines and checks the whole text once | fork only |
-| Windows: no-element `type_text` writes through the focused UIA document at its caret or selection (one selection, at most 1M characters), with read-back and a verified caret, instead of Unicode packets that Windows 11 Notepad collapsed; the write leaves no modified marker or undo step and skips Autocorrect | fork only |
+| Linux: a pid whose app did not answer `GetChildren` gets `app_unresponsive` at once, without a walk, until a `GetState` probe to its root gets a reply | [#6991](https://github.com/trycua/cua/pull/6991) |
+| Windows: a service-mode daemon claims its pipe name with its first instance (`FILE_FLAG_FIRST_PIPE_INSTANCE`), as an embedded one already did, so it never joins a name another server holds | fork only, reported upstream |
+| Windows: the daemon's clients refuse a named pipe whose server process runs as another Windows account | fork only, reported upstream |
+| Windows: `type_text`'s tail repair and read-back accept text that replaced a selection, so the repair no longer types a shared end again ("abcc"), and an unchanged value is reported as dropped or typed over an identical selection, not as a firm drop; the read-back also matches a multi-line text that an Edit control stores with CRLF | [#7065](https://github.com/trycua/cua/pull/7065) |
+| all platforms: `type_text` takes `literal`, which types the text without stripping a trailing run of unbalanced agent-protocol closing tags, for a client that splits a text into lines and checks the whole text once | [#6994](https://github.com/trycua/cua/pull/6994) |
+| Windows: no-element `type_text` writes through the focused UIA document at its caret or selection (one selection, at most 1M characters), with read-back and a verified caret, instead of Unicode packets that Windows 11 Notepad collapsed; the write leaves no modified marker or undo step and skips Autocorrect | [#6995](https://github.com/trycua/cua/pull/6995) |
+| Windows: a focused-document probe that has not answered within 2 s, or that is still running from the previous call, fails the call with nothing written and no keys sent, instead of falling back to Unicode keys that a busy Notepad replays garbled | [#6996](https://github.com/trycua/cua/pull/6996) |
 | Linux: XTest typing (desktop and foreground `type_text`) turns Caps Lock off for the text and back on after it, so a locked Caps Lock no longer inverts the text's case | [#6817](https://github.com/trycua/cua/pull/6817) |
 | Linux: a window capture reads only the part of the window on the screen and pads the rest black, so a window past the screen edge no longer fails with BadMatch | the same fix is third-party [#5742](https://github.com/trycua/cua/pull/5742) |
+| Linux: a window whose frame matches the window geometry exactly, while no other frame does, is named without the 24 px margin, so cascaded same-size windows of one pid (Chrome) no longer fall back to a walk of the whole application | [#6983](https://github.com/trycua/cua/pull/6983) |
+| macOS: the permission guide, its banner and its status lines name the app the driver runs in (the shown name of the nearest enclosing .app), else Cua Driver | [#6985](https://github.com/trycua/cua/pull/6985) |
+| macOS: the permission guide opens at the left edge of the visible frame, clear of the Settings switches and the access prompt | [#6984](https://github.com/trycua/cua/pull/6984) |
 
 Before a box image moves its cua-driver pin to `dev`:
 
@@ -50,6 +54,7 @@ Before a box image moves its cua-driver pin to `dev`:
 
 Upstream already:
 
+- read the macOS keyboard layout on the main queue in a process that runs AppKit, so `press_key` no longer traps in Text Input Sources ([#6939](https://github.com/trycua/cua/pull/6939), which replaced the fork's own fix for the same trap);
 - capture the macOS desktop with captureImage(in:) when there is no overlay to leave out ([#6881](https://github.com/trycua/cua/pull/6881), from [#6028](https://github.com/trycua/cua/pull/6028));
 - stop the macOS launch watchdog once the driver itself activates an app ([#6803](https://github.com/trycua/cua/pull/6803)'s focus arbiter, which replaced the fork's launch hold);
 - never borrow keycode 8 for a Linux text character ([#5595](https://github.com/trycua/cua/pull/5595), from [#5592](https://github.com/trycua/cua/pull/5592));
