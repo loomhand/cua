@@ -100,6 +100,7 @@ impl TypePacing {
     }
 }
 const PING_TIMEOUT: Duration = Duration::from_secs(1);
+const UNPINGED_CLIENT_IDLE: Duration = Duration::from_millis(150);
 static PING_SERIAL: AtomicU32 = AtomicU32::new(1);
 
 #[derive(Clone, Debug)]
@@ -4527,6 +4528,106 @@ mod admission_tests {
 }
 
 #[cfg(test)]
+mod unpinged_client_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    use x11rb::protocol::xtest::ConnectionExt as _;
+    use x11rb::protocol::Event;
+
+    struct Server(std::process::Child);
+    impl Drop for Server {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[test]
+    fn a_client_without_ping_reads_its_spare_keycodes_before_they_are_restored() {
+        let mut server = Server(
+            Command::new("Xvfb")
+                .args(["-displayfd", "1", "-nolisten", "tcp"])
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("install xvfb to run spare keycode tests"),
+        );
+        let mut number = String::new();
+        BufReader::new(server.0.stdout.take().unwrap())
+            .read_line(&mut number)
+            .unwrap();
+        let display = format!(":{}", number.trim());
+        let (reader, screen) = RustConnection::connect(Some(&display)).unwrap();
+        let root = reader.setup().roots[screen].root;
+        let win = reader.generate_id().unwrap();
+        reader
+            .create_window(
+                0,
+                win,
+                root,
+                0,
+                0,
+                50,
+                50,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                0,
+                &CreateWindowAux::new().event_mask(EventMask::KEY_PRESS),
+            )
+            .unwrap();
+        reader.map_window(win).unwrap();
+        reader
+            .set_input_focus(InputFocus::PARENT, win, 0u32)
+            .unwrap();
+        reader.get_input_focus().unwrap().reply().unwrap();
+
+        let text = "\u{4e2d}\u{6587}\u{8f93}\u{5165}\u{6cd5}\u{6d4b}\u{8bd5}";
+        let count = text.chars().count();
+        let typed = std::thread::spawn(move || {
+            let mut typed = String::new();
+            while typed.chars().count() < count {
+                let Event::KeyPress(press) = reader.wait_for_event().unwrap() else {
+                    continue;
+                };
+                if typed.is_empty() {
+                    sleep(Duration::from_millis(50));
+                }
+                let keysym = reader
+                    .get_keyboard_mapping(press.detail, 1)
+                    .unwrap()
+                    .reply()
+                    .unwrap()
+                    .keysyms[0];
+                let ch = char::from_u32(keysym.wrapping_sub(0x0100_0000));
+                typed.push(ch.unwrap_or('?'));
+            }
+            typed
+        });
+
+        let (conn, _) = RustConnection::connect(Some(&display)).unwrap();
+        let mapping = conn.get_keyboard_mapping(8, 248).unwrap().reply().unwrap();
+        let client = RefCell::new(TextClient::new(&conn, None));
+        type_text_in_spare_batches(
+            text,
+            &mapping,
+            |ch, mapping| text_keycode(&mut client.borrow_mut(), mapping, ch),
+            |keycode, _| {
+                client.borrow_mut().record_recipient(keycode);
+                for kind in [KEY_PRESS_EVENT, KEY_RELEASE_EVENT] {
+                    conn.xtest_fake_input(kind, keycode, 0, x11rb::NONE, 0, 0, 0)?;
+                }
+                conn.flush()?;
+                Ok(())
+            },
+            || client.borrow_mut().release(),
+        )
+        .unwrap();
+
+        assert_eq!(typed.join().unwrap(), text);
+    }
+}
+
+#[cfg(test)]
 mod own_dialog_tests {
     use super::*;
     use std::io::{BufRead, BufReader};
@@ -5152,6 +5253,7 @@ struct TextClient<'a> {
     borrowed: Vec<RemappedKeycode<'a>>,
     sent: Vec<Window>,
     unanswered: Vec<Window>,
+    last_borrowed_key: Instant,
 }
 
 impl<'a> TextClient<'a> {
@@ -5162,6 +5264,7 @@ impl<'a> TextClient<'a> {
             borrowed: Vec::new(),
             sent: Vec::new(),
             unanswered: Vec::new(),
+            last_borrowed_key: Instant::now(),
         }
     }
 
@@ -5176,6 +5279,7 @@ impl<'a> TextClient<'a> {
         if !self.borrowed.iter().any(|guard| guard.keycode == keycode) {
             return;
         }
+        self.last_borrowed_key = Instant::now();
         if let Some(window) = self.recipient() {
             if !self.sent.contains(&window) {
                 self.sent.push(window);
@@ -5183,19 +5287,25 @@ impl<'a> TextClient<'a> {
         }
     }
 
-    fn ping(&mut self, window: Window) {
+    fn ping(&mut self, window: Window) -> ClientSync {
         if self.unanswered.contains(&window) {
-            return;
+            return ClientSync::Unanswered;
         }
-        if sync_client(self.conn, Some(window)) == ClientSync::Unanswered {
+        let sync = sync_client(self.conn, Some(window));
+        if sync == ClientSync::Unanswered {
             self.unanswered.push(window);
         }
+        sync
     }
 
     fn release(&mut self) -> bool {
         let sent = std::mem::take(&mut self.sent);
+        let mut unpinged = false;
         for &window in &sent {
-            self.ping(window);
+            unpinged |= self.ping(window) == ClientSync::Unsupported;
+        }
+        if unpinged {
+            sleep(UNPINGED_CLIENT_IDLE.saturating_sub(self.last_borrowed_key.elapsed()));
         }
         self.borrowed.clear();
         let unanswered = std::mem::take(&mut self.unanswered);
