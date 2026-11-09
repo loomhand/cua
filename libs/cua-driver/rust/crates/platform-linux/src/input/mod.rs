@@ -3757,6 +3757,7 @@ pub fn send_type_text_with_delay(xid: u64, text: &str, inter_char_ms: u64) -> Re
         |ch, mapping| text_keycode(&mut client.borrow_mut(), mapping, ch),
         |keycode, needs_shift| {
             client.borrow_mut().record_recipient(keycode);
+            let pacing = client.borrow().pacing_for(keycode, pacing);
             let state = if needs_shift {
                 KeyButMask::SHIFT
             } else {
@@ -3852,6 +3853,7 @@ fn type_text_xtest(conn: &RustConnection, text: &str, pacing: TypePacing) -> Res
         |ch, mapping| text_keycode(&mut client.borrow_mut(), mapping, ch),
         |keycode, needs_shift| {
             client.borrow_mut().record_recipient(keycode);
+            let pacing = client.borrow().pacing_for(keycode, pacing);
             let mut delivered = Delivered::default();
             for kc in needs_shift.then_some(shift_kc).into_iter().chain([keycode]) {
                 delivered.press(KEY_PRESS_EVENT, kc, || {
@@ -4613,6 +4615,8 @@ mod unpinged_client_tests {
             |ch, mapping| text_keycode(&mut client.borrow_mut(), mapping, ch),
             |keycode, _| {
                 client.borrow_mut().record_recipient(keycode);
+                let paced = client.borrow().pacing_for(keycode, TypePacing::default());
+                assert_eq!(paced.delay_ms, KEY_DELAY_MS);
                 for kind in [KEY_PRESS_EVENT, KEY_RELEASE_EVENT] {
                     conn.xtest_fake_input(kind, keycode, 0, x11rb::NONE, 0, 0, 0)?;
                 }
@@ -5253,6 +5257,7 @@ struct TextClient<'a> {
     borrowed: Vec<RemappedKeycode<'a>>,
     sent: Vec<Window>,
     unanswered: Vec<Window>,
+    unpinged: bool,
     last_borrowed_key: Instant,
 }
 
@@ -5264,6 +5269,7 @@ impl<'a> TextClient<'a> {
             borrowed: Vec::new(),
             sent: Vec::new(),
             unanswered: Vec::new(),
+            unpinged: false,
             last_borrowed_key: Instant::now(),
         }
     }
@@ -5276,7 +5282,7 @@ impl<'a> TextClient<'a> {
     }
 
     fn record_recipient(&mut self, keycode: u8) {
-        if !self.borrowed.iter().any(|guard| guard.keycode == keycode) {
+        if !self.borrows(keycode) {
             return;
         }
         self.last_borrowed_key = Instant::now();
@@ -5287,24 +5293,37 @@ impl<'a> TextClient<'a> {
         }
     }
 
-    fn ping(&mut self, window: Window) -> ClientSync {
+    fn borrows(&self, keycode: u8) -> bool {
+        self.borrowed.iter().any(|guard| guard.keycode == keycode)
+    }
+
+    fn pacing_for(&self, keycode: u8, pacing: TypePacing) -> TypePacing {
+        if self.unpinged && self.borrows(keycode) {
+            TypePacing {
+                delay_ms: pacing.delay_ms.max(KEY_DELAY_MS),
+            }
+        } else {
+            pacing
+        }
+    }
+
+    fn ping(&mut self, window: Window) {
         if self.unanswered.contains(&window) {
-            return ClientSync::Unanswered;
+            return;
         }
-        let sync = sync_client(self.conn, Some(window));
-        if sync == ClientSync::Unanswered {
-            self.unanswered.push(window);
+        match sync_client(self.conn, Some(window)) {
+            ClientSync::Unanswered => self.unanswered.push(window),
+            ClientSync::Unsupported => self.unpinged = true,
+            ClientSync::Confirmed => {}
         }
-        sync
     }
 
     fn release(&mut self) -> bool {
         let sent = std::mem::take(&mut self.sent);
-        let mut unpinged = false;
         for &window in &sent {
-            unpinged |= self.ping(window) == ClientSync::Unsupported;
+            self.ping(window);
         }
-        if unpinged {
+        if self.unpinged && !sent.is_empty() {
             sleep(UNPINGED_CLIENT_IDLE.saturating_sub(self.last_borrowed_key.elapsed()));
         }
         self.borrowed.clear();
