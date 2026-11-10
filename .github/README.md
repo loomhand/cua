@@ -44,9 +44,10 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | Linux: a window whose frame matches the window geometry exactly, while no other frame does, is named without the 24 px margin, so cascaded same-size windows of one pid (Chrome) no longer fall back to a walk of the whole application | [#6983](https://github.com/trycua/cua/pull/6983) |
 | macOS: the permission guide, its banner and its status lines name the app the driver runs in (the shown name of the nearest enclosing .app), else Cua Driver | [#6985](https://github.com/trycua/cua/pull/6985) |
 | macOS: the permission guide opens at the left edge of the visible frame, clear of the Settings switches and the access prompt | [#6984](https://github.com/trycua/cua/pull/6984) |
-| Linux tests: the NO_AT_BRIDGE test waits for the spawned process's environment before it reads `/proc/<pid>/environ`, so it no longer fails with `left: None` (test only) | [#7067](https://github.com/trycua/cua/pull/7067) |
-| Linux: keys typed through borrowed spare keycodes are paced (10 ms hold, 10 ms gap), and the keycodes stay bound until 150 ms after the last such key, so the client looks them up before the keymap is restored; a `_NET_WM_PING` answer does not prove that, since Qt answers it ahead of input events it has set aside | fork only, upstream pull request pending |
-| Linux: the virtual keyboard waits for the X server to read each run of about 8 key events before it sends more, so a CPU-starved server no longer overflows the 64-event evdev buffer and loses most of a text | [#7076](https://github.com/trycua/cua/pull/7076) |
+| macOS: a batched `type_text` is retyped only when a native field shows its old value followed by the text's first characters, never in a terminal, and an unconfirmed terminal insert reports no delivered count | issue [#7245](https://github.com/trycua/cua/issues/7245) |
+| macOS: an unconfirmed terminal insert says a terminal may not echo what it reads and the text must not be typed again, with no foreground escalation | issue [#7243](https://github.com/trycua/cua/issues/7243) |
+| macOS: a read-back that changed without growing is unverifiable; an `AXSelectedText` write that changed the field is not followed by keys, and the key rung gives up once the value stops moving | issue [#7244](https://github.com/trycua/cua/issues/7244) |
+| macOS: a terminal confirms typed text only by a copy its scrollback did not already hold, and never when its value could not be read before the keys | issue [#7242](https://github.com/trycua/cua/issues/7242) |
 
 Before a box image moves its cua-driver pin to `dev`:
 
@@ -57,6 +58,8 @@ Before a box image moves its cua-driver pin to `dev`:
 
 Upstream already:
 
+- wait for the spawned process's environment in the NO_AT_BRIDGE test ([#7080](https://github.com/trycua/cua/pull/7080), which superseded [#7067](https://github.com/trycua/cua/pull/7067));
+- confirm the Linux virtual keyboard's key events run by run and unplug it when keys stay unread ([#7145](https://github.com/trycua/cua/pull/7145), salvaged from [#7076](https://github.com/trycua/cua/pull/7076)), and keep borrowed keycodes bound until 150 ms after a text's last key on them ([#7146](https://github.com/trycua/cua/pull/7146), salvaged from [#7079](https://github.com/trycua/cua/pull/7079));
 - read the macOS keyboard layout on the main queue in a process that runs AppKit, so `press_key` no longer traps in Text Input Sources ([#6939](https://github.com/trycua/cua/pull/6939), which replaced the fork's own fix for the same trap);
 - capture the macOS desktop with captureImage(in:) when there is no overlay to leave out ([#6881](https://github.com/trycua/cua/pull/6881), from [#6028](https://github.com/trycua/cua/pull/6028));
 - stop the macOS launch watchdog once the driver itself activates an app ([#6803](https://github.com/trycua/cua/pull/6803)'s focus arbiter, which replaced the fork's launch hold);
