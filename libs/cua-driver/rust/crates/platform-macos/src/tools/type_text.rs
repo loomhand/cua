@@ -710,7 +710,9 @@ fn after_unlanded_ax_write(
             UnlandedAxWrite::MayHaveLanded
         }
         Some(TypedProgress::Unchanged) => UnlandedAxWrite::TypeKeys(AxAttempt::Unchanged),
-        Some(TypedProgress::Unverifiable) => UnlandedAxWrite::TypeKeys(AxAttempt::Unverifiable),
+        Some(TypedProgress::Unverifiable | TypedProgress::Changed) => {
+            UnlandedAxWrite::TypeKeys(AxAttempt::Unverifiable)
+        }
         None => UnlandedAxWrite::TypeKeys(AxAttempt::Rejected),
         Some(TypedProgress::Complete | TypedProgress::Partial(_)) => unreachable!(),
     }
@@ -1029,6 +1031,7 @@ enum TypedProgress {
     Complete,
     Partial(usize),
     Unchanged,
+    Changed,
     Unverifiable,
 }
 
@@ -1080,7 +1083,7 @@ fn typed_progress(before: Option<&str>, after: Option<&str>, text: &str) -> Type
         return TypedProgress::Unchanged;
     }
     match after.chars().count().saturating_sub(before.chars().count()) {
-        0 => TypedProgress::Unverifiable,
+        0 => TypedProgress::Changed,
         delivered => TypedProgress::Partial(delivered.min(text.chars().count())),
     }
 }
@@ -1510,6 +1513,7 @@ fn await_typed_delivery(
                     Some(best_partial.map_or(delivered, |best: usize| best.max(delivered)));
             }
             TypedProgress::Unverifiable => return (false, None),
+            TypedProgress::Changed => best_partial = None,
             TypedProgress::Unchanged => {
                 // A readable unchanged value is an observed zero-character
                 // delivery, not an unverifiable success.
@@ -3069,11 +3073,11 @@ mod tests {
         let text = "abcdefghijklmnopq";
         assert_eq!(
             typed_progress(Some("xx"), Some("aq"), text),
-            TypedProgress::Unverifiable
+            TypedProgress::Changed
         );
         assert_eq!(
             typed_progress(Some("xxx"), Some("a"), text),
-            TypedProgress::Unverifiable
+            TypedProgress::Changed
         );
         assert_eq!(
             typed_progress(Some("$ "), Some("$ "), text),
@@ -3091,6 +3095,54 @@ mod tests {
             || false,
         );
         assert_eq!(outcome, (false, None));
+    }
+
+    #[test]
+    fn a_shrinking_read_back_keeps_polling_until_the_text_shows() {
+        let mut values = std::collections::VecDeque::from(["h", "hi"]);
+        let mut reads = 0;
+        let outcome = await_typed_delivery(
+            Some("xx"),
+            "hi",
+            std::time::Instant::now() + std::time::Duration::from_secs(1),
+            || {
+                reads += 1;
+                values.pop_front().map(str::to_owned)
+            },
+            || false,
+        );
+        assert_eq!(outcome, (true, Some(2)));
+        assert_eq!(reads, 2);
+    }
+
+    #[test]
+    fn a_changed_read_back_polls_to_the_deadline_and_stays_unverifiable() {
+        let wait = UNCHANGED_GIVE_UP + std::time::Duration::from_millis(100);
+        let started = std::time::Instant::now();
+        let outcome = await_typed_delivery(
+            Some("xx"),
+            "abcdefghijklmnopq",
+            started + wait,
+            || Some("aq".to_owned()),
+            || false,
+        );
+        assert_eq!(outcome, (false, None));
+        assert!(started.elapsed() >= wait);
+    }
+
+    #[test]
+    fn an_unchanged_terminal_line_still_gives_up_after_the_window() {
+        let started = std::time::Instant::now();
+        let outcome = await_typed_delivery(
+            Some("$ "),
+            "hunter2",
+            started + DELIVERY_DRAIN_TIMEOUT,
+            || Some("$ ".to_owned()),
+            || false,
+        );
+        assert_eq!(outcome, (false, Some(0)));
+        assert!(started.elapsed() >= UNCHANGED_GIVE_UP);
+        assert!(started.elapsed() < DELIVERY_DRAIN_TIMEOUT / 2);
     }
 
     #[test]
