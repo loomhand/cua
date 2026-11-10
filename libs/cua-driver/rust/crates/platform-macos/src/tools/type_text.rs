@@ -1055,7 +1055,7 @@ fn foreground_settle_ms(pid: i32, frontmost_pid: Option<i32>) -> u64 {
 /// the keystrokes. Only `Complete` positively confirms the text landed:
 /// - unreadable `after` (`None`) → `Unverifiable` (Catalyst case; the agent
 ///   must confirm via screenshot).
-/// - `after` contains the complete text → `Complete`.
+/// - `after` contains the complete text → `Complete`; a terminal needs a copy beyond those in `before`.
 /// - empty input text → trivially `Complete`.
 ///
 /// Otherwise classify an observable insertion without mistaking a prefix for
@@ -1064,14 +1064,23 @@ fn foreground_settle_ms(pid: i32, frontmost_pid: Option<i32>) -> u64 {
 /// defensively. Apps that normalize input (smart quotes, autocomplete) may fail
 /// the substring/length test even though something landed — we report it as
 /// unverified rather than erroring, so the agent can still confirm.
-fn typed_progress(before: Option<&str>, after: Option<&str>, text: &str) -> TypedProgress {
+fn typed_progress(
+    before: Option<&str>,
+    after: Option<&str>,
+    text: &str,
+    terminal: bool,
+) -> TypedProgress {
     if text.is_empty() {
         return TypedProgress::Complete;
     }
     let Some(after) = after else {
         return TypedProgress::Unverifiable;
     };
-    if after.contains(text) {
+    let shown = match before {
+        Some(before) if terminal => after.matches(text).count() > before.matches(text).count(),
+        _ => after.contains(text),
+    };
+    if shown {
         return TypedProgress::Complete;
     }
     // Enter, Tab and Return are not characters a field keeps: they submit,
@@ -1447,6 +1456,7 @@ fn cgevent_type_verified(
     let outcome = await_typed_delivery(
         before,
         text,
+        is_terminal_target,
         deadline,
         || read_axvalue_bound(pid, element_ptr_and_idx, window_id),
         || target_in_web_area(pid, element_ptr_and_idx, window_id),
@@ -1479,6 +1489,7 @@ fn cgevent_type_verified(
             return Ok(await_typed_delivery(
                 before,
                 text,
+                is_terminal_target,
                 deadline,
                 || read_axvalue_bound(pid, element_ptr_and_idx, window_id),
                 || false,
@@ -1521,6 +1532,7 @@ fn appends_prefix(before: Option<&str>, after: Option<&str>, text: &str, done: u
 fn await_typed_delivery(
     before: Option<&str>,
     text: &str,
+    terminal: bool,
     deadline: std::time::Instant,
     read_value: impl FnMut() -> Option<String>,
     is_web: impl FnOnce() -> bool,
@@ -1528,6 +1540,7 @@ fn await_typed_delivery(
     await_typed_delivery_on(
         before,
         text,
+        terminal,
         deadline,
         read_value,
         is_web,
@@ -1538,6 +1551,7 @@ fn await_typed_delivery(
 fn await_typed_delivery_on(
     before: Option<&str>,
     text: &str,
+    terminal: bool,
     deadline: std::time::Instant,
     mut read_value: impl FnMut() -> Option<String>,
     is_web: impl FnOnce() -> bool,
@@ -1549,7 +1563,7 @@ fn await_typed_delivery_on(
     let mut deadline = deadline;
     loop {
         let after = read_value();
-        let progress = typed_progress(before, after.as_deref(), text);
+        let progress = typed_progress(before, after.as_deref(), text, terminal);
         if last_value.is_some() && after != last_value {
             still_since = now();
         }
@@ -1988,7 +2002,12 @@ fn type_text_in_key_window(
         // safely and unreadable AX state is reported as indeterminate.
         let after = unsafe { copy_string_attr(element, "AXValue") };
         let ax_progress = if err == kAXErrorSuccess {
-            Some(typed_progress(before.as_deref(), after.as_deref(), ax_text))
+            Some(typed_progress(
+                before.as_deref(),
+                after.as_deref(),
+                ax_text,
+                false,
+            ))
         } else {
             None
         };
@@ -2819,7 +2838,7 @@ mod tests {
     fn large_atomic_ax_payloads_are_not_subject_to_the_synthesis_budget() {
         assert!(synthesis_preflight(TextDeliveryRoute::AtomicAx, 100_000, 200).is_none());
         assert_eq!(
-            typed_progress(None, Some(&"x".repeat(11_500)), &"x".repeat(11_500)),
+            typed_progress(None, Some(&"x".repeat(11_500)), &"x".repeat(11_500), false),
             TypedProgress::Complete,
             "a successful one-call AX insertion remains eligible regardless of size"
         );
@@ -2998,7 +3017,7 @@ mod tests {
             (Some(""), Some("one\ntwo"), "one\ntwo", Complete),
         ] {
             assert_eq!(
-                typed_progress(before, after, text),
+                typed_progress(before, after, text, false),
                 expected,
                 "before={before:?} after={after:?} text={text:?}"
             );
@@ -3016,6 +3035,7 @@ mod tests {
         let delivery = await_typed_delivery(
             Some(""),
             text,
+            false,
             std::time::Instant::now() + std::time::Duration::from_secs(1),
             || {
                 reads += 1;
@@ -3032,6 +3052,7 @@ mod tests {
         let delivery = await_typed_delivery(
             Some(""),
             "BEGIN-payload-END",
+            false,
             std::time::Instant::now(),
             || Some("BEGIN".to_owned()),
             || false,
@@ -3098,19 +3119,19 @@ mod tests {
     fn a_changed_read_back_that_did_not_grow_is_unverifiable() {
         let text = "abcdefghijklmnopq";
         assert_eq!(
-            typed_progress(Some("xx"), Some("aq"), text),
+            typed_progress(Some("xx"), Some("aq"), text, false),
             TypedProgress::Changed
         );
         assert_eq!(
-            typed_progress(Some("xxx"), Some("a"), text),
+            typed_progress(Some("xxx"), Some("a"), text, false),
             TypedProgress::Changed
         );
         assert_eq!(
-            typed_progress(Some("$ "), Some("$ "), text),
+            typed_progress(Some("$ "), Some("$ "), text, false),
             TypedProgress::Unchanged
         );
         assert_eq!(
-            typed_progress(Some(""), Some("ab"), text),
+            typed_progress(Some(""), Some("ab"), text, false),
             TypedProgress::Partial(2)
         );
     }
@@ -3122,6 +3143,7 @@ mod tests {
         let outcome = await_typed_delivery(
             Some("xx"),
             "hi",
+            false,
             std::time::Instant::now() + std::time::Duration::from_secs(1),
             || {
                 reads += 1;
@@ -3157,6 +3179,7 @@ mod tests {
         let outcome = await_typed_delivery(
             Some(""),
             text,
+            false,
             std::time::Instant::now(),
             || Some("aq".to_owned()),
             || false,
@@ -3201,6 +3224,7 @@ mod tests {
             let outcome = await_typed_delivery(
                 Some(before),
                 text,
+                true,
                 std::time::Instant::now(),
                 || Some(after.to_owned()),
                 || false,
@@ -3211,6 +3235,37 @@ mod tests {
                 "before={before:?} after={after:?} text={text:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_terminal_confirms_only_a_copy_its_scrollback_did_not_already_hold() {
+        use TypedProgress::*;
+        let ran = "$ git push\nok\n$ ";
+        for (before, after, terminal, expected) in [
+            (ran, "$ git push\nok\n$ git pu", true, Partial(6)),
+            ("$ ", "$ git push", true, Complete),
+            (ran, "$ git push\nok\n$ git push", true, Complete),
+            ("$ git push\nok\n$ clear", "$ git push", true, Changed),
+            ("git push", "git push", false, Complete),
+            (ran, "$ git push\nok\n$ git pu", false, Complete),
+        ] {
+            assert_eq!(
+                typed_progress(Some(before), Some(after), "git push", terminal),
+                expected,
+                "before={before:?} after={after:?} terminal={terminal}"
+            );
+        }
+        assert_eq!(
+            await_typed_delivery(
+                Some(ran),
+                "git push",
+                true,
+                std::time::Instant::now(),
+                || Some("$ git push\nok\n$ git pu".to_owned()),
+                || false,
+            ),
+            (false, Some(6))
+        );
     }
 
     #[test]
@@ -3225,6 +3280,7 @@ mod tests {
                 await_typed_delivery(
                     Some(""),
                     "hello",
+                    false,
                     std::time::Instant::now(),
                     || Some(String::new()),
                     || web,
@@ -3241,6 +3297,7 @@ mod tests {
             let result = await_typed_delivery(
                 Some(""),
                 "hello",
+                false,
                 std::time::Instant::now() + std::time::Duration::from_millis(30),
                 || {
                     reads += 1;
@@ -3275,6 +3332,7 @@ mod tests {
             await_typed_delivery(
                 Some(""),
                 "hello",
+                false,
                 std::time::Instant::now(),
                 || None,
                 || panic!("unreadable values must not probe ancestry"),
@@ -3491,6 +3549,7 @@ mod tests {
         let outcome = await_typed_delivery_on(
             before,
             text,
+            false,
             start + DELIVERY_DRAIN_TIMEOUT,
             || {
                 let index = (reads.get() as usize).min(values.len() - 1);
