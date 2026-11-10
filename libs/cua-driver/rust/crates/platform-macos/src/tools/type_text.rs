@@ -1010,7 +1010,10 @@ fn typed_progress(
         return TypedProgress::Unverifiable;
     };
     let shown = match before {
-        Some(before) if terminal => after.matches(text).count() > before.matches(text).count(),
+        Some(before) if terminal => {
+            after != before && after.matches(text).count() > before.matches(text).count()
+        }
+        None if terminal => false,
         _ => after.contains(text),
     };
     if shown {
@@ -2791,6 +2794,14 @@ mod tests {
                 || false,
             ),
             (false, Some(6))
+        );
+        assert_eq!(
+            typed_progress(None, Some("$ git push"), "git push", true),
+            Unverifiable
+        );
+        assert_eq!(
+            typed_progress(Some(ran), Some(ran), "git push", true),
+            Unchanged
         );
     }
 
