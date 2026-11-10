@@ -766,6 +766,22 @@ fn web_readback_next_rung(is_electron: bool, used_pixel_focus: bool) -> Option<&
     }
 }
 
+fn unconfirmed_ax_write(progress: Option<TypedProgress>, target: &str) -> Option<TypeTextOutcome> {
+    let (via, delivered_chars) = match progress? {
+        TypedProgress::Partial(delivered) => ("partial AX write", Some(delivered)),
+        TypedProgress::Changed => ("AX write", None),
+        TypedProgress::Complete | TypedProgress::Unchanged | TypedProgress::Unverifiable => {
+            return None
+        }
+    };
+    Some(TypeTextOutcome {
+        detail: format!(" via {via} into{target}"),
+        path: PATH_AX,
+        verified: false,
+        delivered_chars,
+    })
+}
+
 fn electron_background_ax_refusal(
     delivery_mode: super::DeliveryMode,
     has_ax_target: bool,
@@ -924,6 +940,7 @@ enum TypedProgress {
     Complete,
     Partial(usize),
     Unchanged,
+    Changed,
     Unverifiable,
 }
 
@@ -971,15 +988,12 @@ fn typed_progress(before: Option<&str>, after: Option<&str>, text: &str) -> Type
     let Some(before) = before else {
         return TypedProgress::Unverifiable;
     };
-    let delivered = after
-        .chars()
-        .count()
-        .saturating_sub(before.chars().count())
-        .min(text.chars().count());
-    if delivered == 0 {
-        TypedProgress::Unchanged
-    } else {
-        TypedProgress::Partial(delivered)
+    if after == before {
+        return TypedProgress::Unchanged;
+    }
+    match after.chars().count().saturating_sub(before.chars().count()) {
+        0 => TypedProgress::Changed,
+        delivered => TypedProgress::Partial(delivered.min(text.chars().count())),
     }
 }
 
@@ -1327,31 +1341,61 @@ fn await_typed_delivery(
     before: Option<&str>,
     text: &str,
     deadline: std::time::Instant,
-    mut read_value: impl FnMut() -> Option<String>,
+    read_value: impl FnMut() -> Option<String>,
     is_web: impl FnOnce() -> bool,
 ) -> (bool, Option<usize>) {
+    await_typed_delivery_on(
+        before,
+        text,
+        deadline,
+        read_value,
+        is_web,
+        std::time::Instant::now,
+    )
+}
+
+fn await_typed_delivery_on(
+    before: Option<&str>,
+    text: &str,
+    deadline: std::time::Instant,
+    mut read_value: impl FnMut() -> Option<String>,
+    is_web: impl FnOnce() -> bool,
+    mut now: impl FnMut() -> std::time::Instant,
+) -> (bool, Option<usize>) {
     let mut best_partial = None;
-    let started = std::time::Instant::now();
+    let mut last_value = None;
+    let mut still_since = now();
     let mut deadline = deadline;
     loop {
         let after = read_value();
-        match typed_progress(before, after.as_deref(), text) {
+        let progress = typed_progress(before, after.as_deref(), text);
+        if last_value.is_some() && after != last_value {
+            still_since = now();
+        }
+        last_value = after;
+        let growing = match progress {
             TypedProgress::Complete => return (true, Some(text.chars().count())),
             TypedProgress::Partial(delivered) => {
                 best_partial =
                     Some(best_partial.map_or(delivered, |best: usize| best.max(delivered)));
+                true
             }
             TypedProgress::Unverifiable => return (false, None),
+            TypedProgress::Changed => {
+                best_partial = None;
+                false
+            }
             TypedProgress::Unchanged => {
                 // A readable unchanged value is an observed zero-character
                 // delivery, not an unverifiable success.
                 best_partial.get_or_insert(0);
-                if best_partial == Some(0) && started.elapsed() >= UNCHANGED_GIVE_UP {
-                    deadline = std::time::Instant::now();
-                }
+                false
             }
+        };
+        if !growing && now().duration_since(still_since) >= UNCHANGED_GIVE_UP {
+            deadline = now();
         }
-        if std::time::Instant::now() >= deadline {
+        if now() >= deadline {
             if best_partial == Some(0) && is_web() {
                 best_partial = None;
             }
@@ -1740,21 +1784,20 @@ fn type_text_in_key_window(
                 delivered_chars: Some(text.chars().count()),
             }));
         }
-        if let Some(TypedProgress::Partial(delivered_chars)) = ax_progress {
-            let idx_str = idx_opt.map(|i| format!(" [{i}]")).unwrap_or_default();
-            return Ok(TypeTextDelivery::Typed(TypeTextOutcome {
-                detail: format!(" via partial AX write into{idx_str} {role} \"{title}\""),
-                path: PATH_AX,
-                verified: false,
-                delivered_chars: Some(delivered_chars),
-            }));
+        let idx_str = idx_opt.map(|i| format!(" [{i}]")).unwrap_or_default();
+        if let Some(outcome) =
+            unconfirmed_ax_write(ax_progress, &format!("{idx_str} {role} \"{title}\""))
+        {
+            return Ok(TypeTextDelivery::Typed(outcome));
         }
         ax_attempt = match ax_progress {
             Some(TypedProgress::Unchanged) if unchanged_web_readback => AxAttempt::Unverifiable,
             Some(TypedProgress::Unchanged) => AxAttempt::Unchanged,
             Some(TypedProgress::Unverifiable) => AxAttempt::Unverifiable,
             None => AxAttempt::Rejected,
-            Some(TypedProgress::Complete | TypedProgress::Partial(_)) => unreachable!(),
+            Some(TypedProgress::Complete | TypedProgress::Partial(_) | TypedProgress::Changed) => {
+                unreachable!()
+            }
         };
         tracing::debug!(
             "AX write did not land for {role} \"{title}\" (err={err}); \
@@ -2197,6 +2240,114 @@ mod tests {
         );
         assert_eq!(outcome, (false, Some(0)));
         assert!(started.elapsed() < DELIVERY_DRAIN_TIMEOUT / 2);
+    }
+
+    #[test]
+    fn a_changed_read_back_that_did_not_grow_is_unverifiable() {
+        let text = "abcdefghijklmnopq";
+        assert_eq!(
+            typed_progress(Some("xx"), Some("aq"), text),
+            TypedProgress::Changed
+        );
+        assert_eq!(
+            typed_progress(
+                Some("say hello world"),
+                Some("say \u{201c}hi\u{201d}"),
+                "\"hi\""
+            ),
+            TypedProgress::Changed
+        );
+        assert_eq!(
+            typed_progress(Some("$ "), Some("$ "), text),
+            TypedProgress::Unchanged
+        );
+        assert_eq!(
+            typed_progress(Some(""), Some("ab"), text),
+            TypedProgress::Partial(2)
+        );
+    }
+
+    #[test]
+    fn an_ax_write_that_changed_the_field_is_not_typed_again() {
+        let target = " [3] AXTextField \"Name\"";
+        let changed = unconfirmed_ax_write(Some(TypedProgress::Changed), target)
+            .expect("a changed field took the write");
+        assert_eq!(changed.path, PATH_AX);
+        assert!(!changed.verified);
+        assert_eq!(changed.delivered_chars, None);
+        assert_eq!(
+            changed.detail,
+            " via AX write into [3] AXTextField \"Name\""
+        );
+        let partial = unconfirmed_ax_write(Some(TypedProgress::Partial(2)), target)
+            .expect("a partial write is reported");
+        assert_eq!(partial.delivered_chars, Some(2));
+        assert_eq!(
+            partial.detail,
+            " via partial AX write into [3] AXTextField \"Name\""
+        );
+        for progress in [
+            None,
+            Some(TypedProgress::Complete),
+            Some(TypedProgress::Unchanged),
+            Some(TypedProgress::Unverifiable),
+        ] {
+            assert!(
+                unconfirmed_ax_write(progress, target).is_none(),
+                "{progress:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_still_changed_read_back_stops_polling_after_the_give_up_window() {
+        assert_eq!(
+            reads_until_settled(Some("xx"), &["aq"], "abcdefghijklmnopq"),
+            ((false, None), GIVE_UP_READS)
+        );
+    }
+
+    #[test]
+    fn a_moving_changed_read_back_keeps_polling_until_the_text_shows() {
+        let values = ["d", "dr", "dra", "draf", "draft", "draft ", "final"];
+        assert!(values.len() as u32 > GIVE_UP_READS);
+        assert_eq!(
+            reads_until_settled(Some("draft one"), &values, "final"),
+            ((true, Some(5)), values.len() as u32)
+        );
+    }
+
+    #[test]
+    fn an_unchanged_read_back_stops_polling_after_the_give_up_window() {
+        assert_eq!(
+            reads_until_settled(Some("abc"), &["abc"], "xyz"),
+            ((false, Some(0)), GIVE_UP_READS)
+        );
+    }
+
+    const CLOCK_STEP: std::time::Duration = std::time::Duration::from_millis(100);
+    const GIVE_UP_READS: u32 = (UNCHANGED_GIVE_UP.as_millis() / CLOCK_STEP.as_millis()) as u32;
+
+    fn reads_until_settled(
+        before: Option<&str>,
+        values: &[&str],
+        text: &str,
+    ) -> ((bool, Option<usize>), u32) {
+        let start = std::time::Instant::now();
+        let reads = std::cell::Cell::new(0);
+        let outcome = await_typed_delivery_on(
+            before,
+            text,
+            start + DELIVERY_DRAIN_TIMEOUT,
+            || {
+                let index = (reads.get() as usize).min(values.len() - 1);
+                reads.set(reads.get() + 1);
+                Some(values[index].to_owned())
+            },
+            || false,
+            || start + CLOCK_STEP * reads.get(),
+        );
+        (outcome, reads.get())
     }
 
     #[test]
