@@ -470,6 +470,8 @@ impl Tool for TypeTextTool {
                 let untrusted_web_readback = verification.untrusted_web_readback;
                 let electron_web_content = untrusted_web_readback
                     && crate::browser::electron_js::ElectronJs::is_electron(pid);
+                let (unconfirmed_note, foreground_next) =
+                    unconfirmed_advice(path, is_terminal_target);
 
                 // `verified:false` means the driver could not confirm the text
                 // landed (Electron AX echo, unreadable AXValue on Catalyst, or a
@@ -494,18 +496,8 @@ impl Tool for TypeTextTool {
                              renderer/DOM observed the input. {next_step}"
                         ),
                     )
-                } else if path == PATH_KEY_EVENTS_FG {
-                    (
-                        "📨 Sent (unverified)",
-                        " — driver could not confirm; verify via screenshot.".to_string(),
-                    )
                 } else {
-                    (
-                        "📨 Sent (unverified)",
-                        " — driver could not confirm the text landed; verify via screenshot, \
-                      and re-call with delivery_mode:\"foreground\" if it didn't."
-                            .to_string(),
-                    )
+                    ("📨 Sent (unverified)", unconfirmed_note.to_owned())
                 };
                 let note = if under_lock {
                     super::UNDER_LOCK_NOTE.to_owned()
@@ -570,7 +562,7 @@ impl Tool for TypeTextTool {
                                 "reason": reason,
                             });
                         }
-                    } else if !verified && path != PATH_KEY_EVENTS_FG && !under_lock {
+                    } else if !verified && foreground_next && !under_lock {
                         s["escalation"] = serde_json::json!({
                             "recommended": "foreground",
                             "reason": "background insert could not be confirmed — \
@@ -774,6 +766,24 @@ fn web_readback_next_rung(is_electron: bool, used_pixel_focus: bool) -> Option<&
         (true, true) => None,
         (true, false) => Some("px"),
         (false, _) => Some("page"),
+    }
+}
+
+fn unconfirmed_advice(path: &str, is_terminal_target: bool) -> (&'static str, bool) {
+    if is_terminal_target {
+        (
+            " — a terminal may not echo what it reads (a password prompt), so neither the \
+             screen nor a screenshot can confirm it; do not type the text again.",
+            false,
+        )
+    } else if path == PATH_KEY_EVENTS_FG {
+        (" — driver could not confirm; verify via screenshot.", false)
+    } else {
+        (
+            " — driver could not confirm the text landed; verify via screenshot, and re-call \
+             with delivery_mode:\"foreground\" if it didn't.",
+            true,
+        )
     }
 }
 
@@ -1323,8 +1333,7 @@ fn cgevent_type_verified(
     // CGEvent posting is asynchronous with respect to the renderer. In
     // particular, Chromium can acknowledge the posting process while a long
     // tail remains queued. Poll the AX value until the complete payload is
-    // visible instead of treating any growth as success. If the deadline
-    // expires after observable growth, surface the exact partial count.
+    // visible instead of treating any growth as success.
     let deadline = std::time::Instant::now() + DELIVERY_DRAIN_TIMEOUT;
     let outcome = await_typed_delivery(
         before,
@@ -1353,15 +1362,12 @@ fn cgevent_type_verified(
         }
     }
     if is_terminal_target {
-        return Ok((outcome.0, honest_terminal_count(outcome)));
+        return Ok((outcome.0, outcome.1.filter(|_| outcome.0)));
     }
     Ok(outcome)
 }
 
-/// Where a batched send resumes when a native field took only part of it (an
-/// app that reads just the first character of a multi-character event). A web
-/// or terminal read-back cannot prove how much landed, and an unchanged field
-/// proves no partial take, so none of them is retyped.
+/// Resumes a batched send when a native field shows its old value followed by the start of the text.
 fn retype_from(
     outcome: (bool, Option<usize>),
     total: usize,
@@ -1409,26 +1415,37 @@ fn await_typed_delivery_on(
     mut now: impl FnMut() -> std::time::Instant,
 ) -> (bool, Option<usize>) {
     let mut best_partial = None;
-    let started = now();
+    let mut last_value = None;
+    let mut still_since = now();
     let mut deadline = deadline;
     loop {
         let after = read_value();
-        match typed_progress(before, after.as_deref(), text) {
+        let progress = typed_progress(before, after.as_deref(), text);
+        if last_value.is_some() && after != last_value {
+            still_since = now();
+        }
+        last_value = after;
+        let growing = match progress {
             TypedProgress::Complete => return (true, Some(text.chars().count())),
             TypedProgress::Partial(delivered) => {
                 best_partial =
                     Some(best_partial.map_or(delivered, |best: usize| best.max(delivered)));
+                true
             }
             TypedProgress::Unverifiable => return (false, None),
-            TypedProgress::Changed => best_partial = None,
+            TypedProgress::Changed => {
+                best_partial = None;
+                false
+            }
             TypedProgress::Unchanged => {
                 // A readable unchanged value is an observed zero-character
                 // delivery, not an unverifiable success.
                 best_partial.get_or_insert(0);
-                if best_partial == Some(0) && now().duration_since(started) >= UNCHANGED_GIVE_UP {
-                    deadline = now();
-                }
+                false
             }
+        };
+        if !growing && now().duration_since(still_since) >= UNCHANGED_GIVE_UP {
+            deadline = now();
         }
         if now() >= deadline {
             if best_partial == Some(0) && is_web() {
@@ -1822,33 +1839,27 @@ fn type_text_in_key_window(
                 CFRelease(element as _);
             }
         }
+        let idx_str = idx_opt.map(|i| format!(" [{i}]")).unwrap_or_default();
+        let target = format!("{idx_str} {role} \"{title}\"");
         if ax_progress == Some(TypedProgress::Complete) {
-            let idx_str = idx_opt.map(|i| format!(" [{i}]")).unwrap_or_default();
             return Ok(TypeTextDelivery::Typed(TypeTextOutcome {
-                detail: format!(
-                    " into{idx_str} {role} \"{title}\"{}",
-                    document.note().trim_end_matches('.')
-                ),
+                detail: format!(" into{target}{}", document.note().trim_end_matches('.')),
                 path: PATH_AX,
                 verified: true,
                 delivered_chars: Some(text.chars().count()),
             }));
         }
-        if let Some(TypedProgress::Partial(delivered_chars)) = ax_progress {
-            let idx_str = idx_opt.map(|i| format!(" [{i}]")).unwrap_or_default();
-            return Ok(TypeTextDelivery::Typed(TypeTextOutcome {
-                detail: format!(" via partial AX write into{idx_str} {role} \"{title}\""),
-                path: PATH_AX,
-                verified: false,
-                delivered_chars: Some(delivered_chars),
-            }));
+        if let Some(outcome) = unconfirmed_ax_write(ax_progress, &target) {
+            return Ok(TypeTextDelivery::Typed(outcome));
         }
         ax_attempt = match ax_progress {
             Some(TypedProgress::Unchanged) if unchanged_web_readback => AxAttempt::Unverifiable,
             Some(TypedProgress::Unchanged) => AxAttempt::Unchanged,
-            Some(TypedProgress::Unverifiable | TypedProgress::Changed) => AxAttempt::Unverifiable,
+            Some(TypedProgress::Unverifiable) => AxAttempt::Unverifiable,
             None => AxAttempt::Rejected,
-            Some(TypedProgress::Complete | TypedProgress::Partial(_)) => unreachable!(),
+            Some(TypedProgress::Complete | TypedProgress::Partial(_) | TypedProgress::Changed) => {
+                unreachable!()
+            }
         };
         tracing::debug!(
             "AX write did not land for {role} \"{title}\" (err={err}); \
@@ -1898,6 +1909,22 @@ fn type_text_in_key_window(
     }))
 }
 
+fn unconfirmed_ax_write(progress: Option<TypedProgress>, target: &str) -> Option<TypeTextOutcome> {
+    let (via, delivered_chars) = match progress? {
+        TypedProgress::Partial(delivered) => ("partial AX write", Some(delivered)),
+        TypedProgress::Changed => ("AX write", None),
+        TypedProgress::Complete | TypedProgress::Unchanged | TypedProgress::Unverifiable => {
+            return None
+        }
+    };
+    Some(TypeTextOutcome {
+        detail: format!(" via {via} into{target}"),
+        path: PATH_AX,
+        verified: false,
+        delivered_chars,
+    })
+}
+
 /// The refusals a background key insert into a terminal needs before any key
 /// is posted: a semantic-only restriction, or a text over the synthesis
 /// budget.
@@ -1919,12 +1946,6 @@ fn terminal_key_refusal(
         refusal,
         ax_attempt: AxAttempt::NotAttempted,
     })
-}
-
-/// A terminal key insert's delivered count, known only when the screen shows
-/// the whole text: a redraw or a prompt without echo cannot count a shortfall.
-fn honest_terminal_count((verified, delivered_chars): (bool, Option<usize>)) -> Option<usize> {
-    delivered_chars.filter(|_| verified)
 }
 
 fn keystroke_detail(via: &str, is_terminal_target: bool, delay_ms: u64) -> String {
@@ -2176,15 +2197,6 @@ mod tests {
     const CLOCK_STEP: std::time::Duration = std::time::Duration::from_millis(100);
     const GIVE_UP_READS: u32 =
         (super::UNCHANGED_GIVE_UP.as_millis() / CLOCK_STEP.as_millis()) as u32;
-
-    #[test]
-    fn a_terminal_counts_only_a_confirmed_insert() {
-        use super::honest_terminal_count;
-        assert_eq!(honest_terminal_count((false, Some(0))), None);
-        assert_eq!(honest_terminal_count((false, Some(2))), None);
-        assert_eq!(honest_terminal_count((false, None)), None);
-        assert_eq!(honest_terminal_count((true, Some(3))), Some(3));
-    }
 
     /// A kitty text view whose `AXValue` writes return `err` and leave the
     /// value blank, as an unfocused kitty reads.
@@ -2571,22 +2583,9 @@ mod tests {
     #[test]
     fn zero_progress_stops_polling_after_the_give_up_window() {
         assert_eq!(
-            reads_until_settled(Some("abc"), "abc", "xyz"),
+            reads_until_settled(Some("abc"), &["abc"], "xyz"),
             ((false, Some(0)), GIVE_UP_READS)
         );
-    }
-
-    #[test]
-    fn a_no_echo_terminal_is_neither_retyped_nor_counted() {
-        let outcome = await_typed_delivery(
-            Some("$ "),
-            "hunter2",
-            std::time::Instant::now(),
-            || Some("$ ".to_owned()),
-            || false,
-        );
-        assert_eq!(retype_from(outcome, 7, true, || false), None);
-        assert_eq!(honest_terminal_count(outcome), None);
     }
 
     #[test]
@@ -2643,14 +2642,6 @@ mod tests {
             typed_progress(Some(""), Some("ab"), text),
             TypedProgress::Partial(2)
         );
-        let outcome = await_typed_delivery(
-            Some("xx"),
-            text,
-            std::time::Instant::now(),
-            || Some("aq".to_owned()),
-            || false,
-        );
-        assert_eq!(outcome, (false, None));
     }
 
     #[test]
@@ -2672,47 +2663,21 @@ mod tests {
     }
 
     #[test]
-    fn a_changed_read_back_polls_to_the_deadline_and_stays_unverifiable() {
-        let wait = UNCHANGED_GIVE_UP + std::time::Duration::from_millis(100);
-        let started = std::time::Instant::now();
-        let outcome = await_typed_delivery(
-            Some("xx"),
-            "abcdefghijklmnopq",
-            started + wait,
-            || Some("aq".to_owned()),
-            || false,
+    fn a_still_changed_read_back_stops_polling_after_the_give_up_window() {
+        assert_eq!(
+            reads_until_settled(Some("xx"), &["aq"], "abcdefghijklmnopq"),
+            ((false, None), GIVE_UP_READS)
         );
-        assert_eq!(outcome, (false, None));
-        assert!(started.elapsed() >= wait);
     }
 
     #[test]
-    fn an_unchanged_terminal_line_still_gives_up_after_the_window() {
+    fn a_moving_changed_read_back_keeps_polling_until_the_text_shows() {
+        let values = ["d", "dr", "dra", "draf", "draft", "draft ", "final"];
+        assert!(values.len() as u32 > GIVE_UP_READS);
         assert_eq!(
-            reads_until_settled(Some("$ "), "$ ", "hunter2"),
-            ((false, Some(0)), GIVE_UP_READS)
+            reads_until_settled(Some("draft one"), &values, "final"),
+            ((true, Some(5)), values.len() as u32)
         );
-    }
-
-    fn reads_until_settled(
-        before: Option<&str>,
-        after: &str,
-        text: &str,
-    ) -> ((bool, Option<usize>), u32) {
-        let start = std::time::Instant::now();
-        let reads = std::cell::Cell::new(0);
-        let outcome = await_typed_delivery_on(
-            before,
-            text,
-            start + DELIVERY_DRAIN_TIMEOUT,
-            || {
-                reads.set(reads.get() + 1);
-                Some(after.to_owned())
-            },
-            || false,
-            || start + CLOCK_STEP * reads.get(),
-        );
-        (outcome, reads.get())
     }
 
     #[test]
@@ -2750,6 +2715,7 @@ mod tests {
                 "before={before:?} after={after:?} done={done}"
             );
         }
+        assert!(appends_prefix(Some("x"), Some("xé"), "éabc", 1));
     }
 
     #[test]
@@ -2770,7 +2736,6 @@ mod tests {
                 None,
                 "before={before:?} after={after:?} text={text:?}"
             );
-            assert_eq!(honest_terminal_count(outcome), None);
         }
     }
 
@@ -2979,5 +2944,77 @@ mod tests {
         }
         assert!(screen_sharing_delivery_error(true, true, Some(7)).is_none());
         assert!(screen_sharing_delivery_error(false, false, None).is_none());
+    }
+
+    #[test]
+    fn an_unconfirmed_terminal_insert_is_never_sent_to_the_foreground() {
+        for path in [PATH_KEY_EVENTS, PATH_KEY_EVENTS_FG, PATH_AX] {
+            let (note, foreground_next) = unconfirmed_advice(path, true);
+            assert!(!foreground_next, "path={path}");
+            assert!(note.contains("password prompt"), "path={path}");
+            assert!(note.contains("do not type the text again"), "path={path}");
+            assert!(!note.contains("delivery_mode"), "path={path}");
+        }
+        let (note, foreground_next) = unconfirmed_advice(PATH_KEY_EVENTS, false);
+        assert!(foreground_next);
+        assert!(note.contains("re-call with delivery_mode:\"foreground\""));
+        assert_eq!(
+            unconfirmed_advice(PATH_KEY_EVENTS_FG, false),
+            (" — driver could not confirm; verify via screenshot.", false)
+        );
+    }
+
+    #[test]
+    fn an_ax_write_that_changed_the_field_is_not_typed_again() {
+        let target = " [3] AXTextField \"Name\"";
+        let changed = unconfirmed_ax_write(Some(TypedProgress::Changed), target)
+            .expect("a changed field took the write");
+        assert_eq!(changed.path, PATH_AX);
+        assert!(!changed.verified);
+        assert_eq!(changed.delivered_chars, None);
+        assert_eq!(
+            changed.detail,
+            " via AX write into [3] AXTextField \"Name\""
+        );
+        let partial = unconfirmed_ax_write(Some(TypedProgress::Partial(2)), target)
+            .expect("a partial write is reported");
+        assert_eq!(partial.delivered_chars, Some(2));
+        assert_eq!(
+            partial.detail,
+            " via partial AX write into [3] AXTextField \"Name\""
+        );
+        for progress in [
+            None,
+            Some(TypedProgress::Complete),
+            Some(TypedProgress::Unchanged),
+            Some(TypedProgress::Unverifiable),
+        ] {
+            assert!(
+                unconfirmed_ax_write(progress, target).is_none(),
+                "{progress:?}"
+            );
+        }
+    }
+
+    fn reads_until_settled(
+        before: Option<&str>,
+        values: &[&str],
+        text: &str,
+    ) -> ((bool, Option<usize>), u32) {
+        let start = std::time::Instant::now();
+        let reads = std::cell::Cell::new(0);
+        let outcome = await_typed_delivery_on(
+            before,
+            text,
+            start + DELIVERY_DRAIN_TIMEOUT,
+            || {
+                let index = (reads.get() as usize).min(values.len() - 1);
+                reads.set(reads.get() + 1);
+                Some(values[index].to_owned())
+            },
+            || false,
+            || start + CLOCK_STEP * reads.get(),
+        );
+        (outcome, reads.get())
     }
 }
