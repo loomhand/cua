@@ -1007,15 +1007,12 @@ fn typed_progress(before: Option<&str>, after: Option<&str>, text: &str) -> Type
     let Some(before) = before else {
         return TypedProgress::Unverifiable;
     };
-    let delivered = after
-        .chars()
-        .count()
-        .saturating_sub(before.chars().count())
-        .min(text.chars().count());
-    if delivered == 0 {
-        TypedProgress::Unchanged
-    } else {
-        TypedProgress::Partial(delivered)
+    if after == before {
+        return TypedProgress::Unchanged;
+    }
+    match after.chars().count().saturating_sub(before.chars().count()) {
+        0 => TypedProgress::Unverifiable,
+        delivered => TypedProgress::Partial(delivered.min(text.chars().count())),
     }
 }
 
@@ -1678,7 +1675,7 @@ fn type_text_in_key_window(
         // foregrounding occurred (no window, or SPIs unavailable) these were
         // background keystrokes and `path` must say so honestly.
         return Ok(TypeTextDelivery::Typed(TypeTextOutcome {
-            detail: format!(" via foreground keystrokes ({delay_ms}ms delay)"),
+            detail: keystroke_detail("foreground keystrokes", is_terminal_target, delay_ms),
             path: if fronted {
                 PATH_KEY_EVENTS_FG
             } else {
@@ -1719,7 +1716,7 @@ fn type_text_in_key_window(
             true,
         )?;
         return Ok(TypeTextDelivery::Typed(TypeTextOutcome {
-            detail: format!(" via CGEvent (terminal emulator, {delay_ms}ms delay)"),
+            detail: keystroke_detail("CGEvent", true, delay_ms),
             path: PATH_KEY_EVENTS,
             verified,
             delivered_chars,
@@ -1871,7 +1868,7 @@ fn type_text_in_key_window(
         false,
     )?;
     Ok(TypeTextDelivery::Typed(TypeTextOutcome {
-        detail: format!(" via CGEvent ({delay_ms}ms delay)"),
+        detail: keystroke_detail("CGEvent", false, delay_ms),
         path: PATH_KEY_EVENTS,
         verified,
         delivered_chars,
@@ -1905,6 +1902,15 @@ fn terminal_key_refusal(
 /// the whole text: a redraw or a prompt without echo cannot count a shortfall.
 fn honest_terminal_count((verified, delivered_chars): (bool, Option<usize>)) -> Option<usize> {
     delivered_chars.filter(|_| verified)
+}
+
+fn keystroke_detail(via: &str, is_terminal_target: bool, delay_ms: u64) -> String {
+    let terminal = if is_terminal_target {
+        "terminal emulator, "
+    } else {
+        ""
+    };
+    format!(" via {via} ({terminal}{delay_ms}ms delay)")
 }
 
 /// The text view an `AXValue` insert writes to.
@@ -1968,7 +1974,8 @@ fn kitty_delivery(view: Option<&impl AxTextView>, text: &str) -> KittyDelivery {
         std::thread::sleep(DELIVERY_DRAIN_POLL_INTERVAL);
     };
     KittyDelivery::Ax(TypeTextOutcome {
-        detail: " via AXValue (kitty commits it to the terminal as typed text)".to_string(),
+        detail: " via AXValue (terminal emulator, kitty commits it to the terminal as typed text)"
+            .to_string(),
         path: PATH_AX,
         verified: landed,
         delivered_chars: landed.then(|| text.chars().count()),
@@ -2570,6 +2577,59 @@ mod tests {
         assert_eq!(retype_from((true, Some(5)), 5, false, || false), None);
         assert_eq!(retype_from((false, None), 5, false, || false), None);
         assert_eq!(retype_from((false, Some(0)), 5, false, || false), None);
+    }
+
+    #[test]
+    fn every_terminal_route_names_the_terminal_emulator() {
+        let view = fake(crate::ax::bindings::kAXErrorSuccess);
+        let KittyDelivery::Ax(kitty) = kitty_delivery(Some(&view), "git status") else {
+            panic!("an applied kitty write fell back to keys");
+        };
+        assert_eq!(
+            kitty.detail,
+            " via AXValue (terminal emulator, kitty commits it to the terminal as typed text)"
+        );
+        assert_eq!(
+            keystroke_detail("CGEvent", true, 0),
+            " via CGEvent (terminal emulator, 0ms delay)"
+        );
+        assert_eq!(
+            keystroke_detail("foreground keystrokes", true, 30),
+            " via foreground keystrokes (terminal emulator, 30ms delay)"
+        );
+        assert_eq!(
+            keystroke_detail("CGEvent", false, 0),
+            " via CGEvent (0ms delay)"
+        );
+    }
+
+    #[test]
+    fn a_changed_read_back_that_did_not_grow_is_unverifiable() {
+        let text = "abcdefghijklmnopq";
+        assert_eq!(
+            typed_progress(Some("xx"), Some("aq"), text),
+            TypedProgress::Unverifiable
+        );
+        assert_eq!(
+            typed_progress(Some("xxx"), Some("a"), text),
+            TypedProgress::Unverifiable
+        );
+        assert_eq!(
+            typed_progress(Some("$ "), Some("$ "), text),
+            TypedProgress::Unchanged
+        );
+        assert_eq!(
+            typed_progress(Some(""), Some("ab"), text),
+            TypedProgress::Partial(2)
+        );
+        let outcome = await_typed_delivery(
+            Some("xx"),
+            text,
+            std::time::Instant::now(),
+            || Some("aq".to_owned()),
+            || false,
+        );
+        assert_eq!(outcome, (false, None));
     }
 
     #[test]
