@@ -1387,11 +1387,29 @@ fn await_typed_delivery(
     before: Option<&str>,
     text: &str,
     deadline: std::time::Instant,
-    mut read_value: impl FnMut() -> Option<String>,
+    read_value: impl FnMut() -> Option<String>,
     is_web: impl FnOnce() -> bool,
 ) -> (bool, Option<usize>) {
+    await_typed_delivery_on(
+        before,
+        text,
+        deadline,
+        read_value,
+        is_web,
+        std::time::Instant::now,
+    )
+}
+
+fn await_typed_delivery_on(
+    before: Option<&str>,
+    text: &str,
+    deadline: std::time::Instant,
+    mut read_value: impl FnMut() -> Option<String>,
+    is_web: impl FnOnce() -> bool,
+    mut now: impl FnMut() -> std::time::Instant,
+) -> (bool, Option<usize>) {
     let mut best_partial = None;
-    let started = std::time::Instant::now();
+    let started = now();
     let mut deadline = deadline;
     loop {
         let after = read_value();
@@ -1407,12 +1425,12 @@ fn await_typed_delivery(
                 // A readable unchanged value is an observed zero-character
                 // delivery, not an unverifiable success.
                 best_partial.get_or_insert(0);
-                if best_partial == Some(0) && started.elapsed() >= UNCHANGED_GIVE_UP {
-                    deadline = std::time::Instant::now();
+                if best_partial == Some(0) && now().duration_since(started) >= UNCHANGED_GIVE_UP {
+                    deadline = now();
                 }
             }
         }
-        if std::time::Instant::now() >= deadline {
+        if now() >= deadline {
             if best_partial == Some(0) && is_web() {
                 best_partial = None;
             }
@@ -2152,6 +2170,10 @@ fn no_focused_text_input_refusal(
 
 #[cfg(test)]
 mod tests {
+    const CLOCK_STEP: std::time::Duration = std::time::Duration::from_millis(100);
+    const GIVE_UP_READS: u32 =
+        (super::UNCHANGED_GIVE_UP.as_millis() / CLOCK_STEP.as_millis()) as u32;
+
     #[test]
     fn a_terminal_counts_only_a_confirmed_insert() {
         use super::honest_terminal_count;
@@ -2545,16 +2567,10 @@ mod tests {
 
     #[test]
     fn zero_progress_stops_polling_after_the_give_up_window() {
-        let started = std::time::Instant::now();
-        let outcome = await_typed_delivery(
-            Some("abc"),
-            "xyz",
-            started + DELIVERY_DRAIN_TIMEOUT,
-            || Some("abc".to_string()),
-            || false,
+        assert_eq!(
+            reads_until_settled(Some("abc"), "abc", "xyz"),
+            ((false, Some(0)), GIVE_UP_READS)
         );
-        assert_eq!(outcome, (false, Some(0)));
-        assert!(started.elapsed() < DELIVERY_DRAIN_TIMEOUT / 2);
     }
 
     #[test]
@@ -2669,17 +2685,31 @@ mod tests {
 
     #[test]
     fn an_unchanged_terminal_line_still_gives_up_after_the_window() {
-        let started = std::time::Instant::now();
-        let outcome = await_typed_delivery(
-            Some("$ "),
-            "hunter2",
-            started + DELIVERY_DRAIN_TIMEOUT,
-            || Some("$ ".to_owned()),
-            || false,
+        assert_eq!(
+            reads_until_settled(Some("$ "), "$ ", "hunter2"),
+            ((false, Some(0)), GIVE_UP_READS)
         );
-        assert_eq!(outcome, (false, Some(0)));
-        assert!(started.elapsed() >= UNCHANGED_GIVE_UP);
-        assert!(started.elapsed() < DELIVERY_DRAIN_TIMEOUT / 2);
+    }
+
+    fn reads_until_settled(
+        before: Option<&str>,
+        after: &str,
+        text: &str,
+    ) -> ((bool, Option<usize>), u32) {
+        let start = std::time::Instant::now();
+        let reads = std::cell::Cell::new(0);
+        let outcome = await_typed_delivery_on(
+            before,
+            text,
+            start + DELIVERY_DRAIN_TIMEOUT,
+            || {
+                reads.set(reads.get() + 1);
+                Some(after.to_owned())
+            },
+            || false,
+            || start + CLOCK_STEP * reads.get(),
+        );
+        (outcome, reads.get())
     }
 
     #[test]
