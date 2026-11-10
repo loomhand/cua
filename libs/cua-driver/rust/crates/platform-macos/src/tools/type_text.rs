@@ -1282,6 +1282,7 @@ const FRONT_SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_mill
 /// Type via CGEvent keystrokes at the current insertion point, then verify by
 /// read-back. `type_text` is deliberately non-idempotent: it must never clear
 /// an existing value merely because AX cannot read that value back.
+#[allow(clippy::too_many_arguments)]
 fn cgevent_type_verified(
     pid: i32,
     text: &str,
@@ -1290,6 +1291,7 @@ fn cgevent_type_verified(
     element_ptr_and_idx: Option<(usize, Option<usize>)>,
     settle_ms: u64,
     window_id: Option<u32>,
+    is_terminal_target: bool,
 ) -> anyhow::Result<(bool, Option<usize>)> {
     // Focus the target element so the keystrokes land in IT. Critical in
     // foreground mode: a freshly-fronted window's keyboard focus may be on the
@@ -1333,30 +1335,41 @@ fn cgevent_type_verified(
         || read_axvalue_bound(pid, element_ptr_and_idx, window_id),
         || target_in_web_area(pid, element_ptr_and_idx, window_id),
     );
-    // A batched send that a native field only partly took (an app that reads
-    // just the first character of a multi-character event) is finished one
-    // paced key at a time from where it stopped. Web content never takes this
-    // branch: its read-back cannot prove how much landed, so a retype could
-    // duplicate text.
     if batched {
-        if let (false, Some(done)) = outcome {
-            let total = text.chars().count();
-            let web = target_in_web_area(pid, element_ptr_and_idx, window_id);
-            if done < total && !web {
-                let tail: String = text.chars().skip(done).collect();
-                crate::input::keyboard::type_text_with_delay(pid, &tail, RETYPE_TAIL_DELAY_MS)?;
-                let deadline = std::time::Instant::now() + DELIVERY_DRAIN_TIMEOUT;
-                return Ok(await_typed_delivery(
-                    before,
-                    text,
-                    deadline,
-                    || read_axvalue_bound(pid, element_ptr_and_idx, window_id),
-                    || false,
-                ));
-            }
+        let web = || target_in_web_area(pid, element_ptr_and_idx, window_id);
+        if let Some(done) = retype_from(outcome, text.chars().count(), is_terminal_target, web) {
+            let tail: String = text.chars().skip(done).collect();
+            crate::input::keyboard::type_text_with_delay(pid, &tail, RETYPE_TAIL_DELAY_MS)?;
+            let deadline = std::time::Instant::now() + DELIVERY_DRAIN_TIMEOUT;
+            return Ok(await_typed_delivery(
+                before,
+                text,
+                deadline,
+                || read_axvalue_bound(pid, element_ptr_and_idx, window_id),
+                || false,
+            ));
         }
     }
+    if is_terminal_target {
+        return Ok((outcome.0, honest_terminal_count(outcome)));
+    }
     Ok(outcome)
+}
+
+/// Where a batched send resumes when a native field took only part of it (an
+/// app that reads just the first character of a multi-character event). A web
+/// or terminal read-back cannot prove how much landed, and an unchanged field
+/// proves no partial take, so none of them is retyped.
+fn retype_from(
+    outcome: (bool, Option<usize>),
+    total: usize,
+    is_terminal_target: bool,
+    is_web: impl FnOnce() -> bool,
+) -> Option<usize> {
+    let (false, Some(done)) = outcome else {
+        return None;
+    };
+    (done > 0 && done < total && !is_terminal_target && !is_web()).then_some(done)
 }
 
 fn await_typed_delivery(
@@ -1554,6 +1567,7 @@ fn type_text_in_key_window(
                 element,
                 foreground_settle_ms,
                 window_id,
+                is_terminal_target,
             )
         };
         let ((verified, delivered_chars), fronted) = match window_id {
@@ -1692,12 +1706,8 @@ fn type_text_in_key_window(
             element_ptr_and_idx,
             /*settle_ms=*/ 0,
             window_id,
+            true,
         )?;
-        let delivered_chars = honest_terminal_count(
-            delivered_chars,
-            before.as_deref(),
-            read_axvalue_bound(pid, element_ptr_and_idx, window_id).as_deref(),
-        );
         return Ok(TypeTextDelivery::Typed(TypeTextOutcome {
             detail: format!(" via CGEvent (terminal emulator, {delay_ms}ms delay)"),
             path: PATH_KEY_EVENTS,
@@ -1848,6 +1858,7 @@ fn type_text_in_key_window(
         element_ptr_and_idx,
         /*settle_ms=*/ 0,
         window_id,
+        false,
     )?;
     Ok(TypeTextDelivery::Typed(TypeTextOutcome {
         detail: format!(" via CGEvent ({delay_ms}ms delay)"),
@@ -1880,17 +1891,10 @@ fn terminal_key_refusal(
     })
 }
 
-/// A terminal key insert's delivered count, or `None` when the read-back
-/// was blank both before and after and so cannot tell zero from all.
-fn honest_terminal_count(
-    delivered_chars: Option<usize>,
-    before: Option<&str>,
-    after: Option<&str>,
-) -> Option<usize> {
-    match delivered_chars {
-        Some(0) if crate::terminal::read_back_is_blank(before, after) => None,
-        other => other,
-    }
+/// A terminal key insert's delivered count, known only when the screen shows
+/// the whole text: a redraw or a prompt without echo cannot count a shortfall.
+fn honest_terminal_count((verified, delivered_chars): (bool, Option<usize>)) -> Option<usize> {
+    delivered_chars.filter(|_| verified)
 }
 
 /// The text view an `AXValue` insert writes to.
@@ -2130,19 +2134,12 @@ fn no_focused_text_input_refusal(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn a_blank_terminal_read_back_is_not_a_zero_delivery() {
+    fn a_terminal_counts_only_a_confirmed_insert() {
         use super::honest_terminal_count;
-        assert_eq!(honest_terminal_count(Some(0), Some(""), Some("")), None);
-        assert_eq!(honest_terminal_count(Some(0), None, Some("")), None);
-        assert_eq!(
-            honest_terminal_count(Some(0), Some("$ "), Some("$ ")),
-            Some(0)
-        );
-        assert_eq!(
-            honest_terminal_count(Some(3), Some(""), Some("abc")),
-            Some(3)
-        );
-        assert_eq!(honest_terminal_count(None, Some(""), Some("")), None);
+        assert_eq!(honest_terminal_count((false, Some(0))), None);
+        assert_eq!(honest_terminal_count((false, Some(2))), None);
+        assert_eq!(honest_terminal_count((false, None)), None);
+        assert_eq!(honest_terminal_count((true, Some(3))), Some(3));
     }
 
     /// A kitty text view whose `AXValue` writes return `err` and leave the
@@ -2539,6 +2536,52 @@ mod tests {
         );
         assert_eq!(outcome, (false, Some(0)));
         assert!(started.elapsed() < DELIVERY_DRAIN_TIMEOUT / 2);
+    }
+
+    #[test]
+    fn a_no_echo_terminal_is_neither_retyped_nor_counted() {
+        let outcome = await_typed_delivery(
+            Some("$ "),
+            "hunter2",
+            std::time::Instant::now(),
+            || Some("$ ".to_owned()),
+            || false,
+        );
+        assert_eq!(retype_from(outcome, 7, true, || false), None);
+        assert_eq!(honest_terminal_count(outcome), None);
+    }
+
+    #[test]
+    fn a_native_field_retypes_only_a_proven_partial_tail() {
+        assert_eq!(retype_from((false, Some(1)), 5, false, || false), Some(1));
+        assert_eq!(retype_from((false, Some(4)), 5, false, || false), Some(4));
+        assert_eq!(retype_from((false, Some(4)), 5, false, || true), None);
+        assert_eq!(retype_from((false, Some(5)), 5, false, || false), None);
+        assert_eq!(retype_from((true, Some(5)), 5, false, || false), None);
+        assert_eq!(retype_from((false, None), 5, false, || false), None);
+        assert_eq!(retype_from((false, Some(0)), 5, false, || false), None);
+    }
+
+    #[test]
+    fn a_redrawn_terminal_screen_is_never_retyped() {
+        for (before, after, text) in [
+            ("one\ntwo\n$ vim", "one\n$ vim", "dd"),
+            ("$ ", "$ \nfile-a  file-b", "a long command line"),
+        ] {
+            let outcome = await_typed_delivery(
+                Some(before),
+                text,
+                std::time::Instant::now(),
+                || Some(after.to_owned()),
+                || false,
+            );
+            assert_eq!(
+                retype_from(outcome, text.chars().count(), true, || false),
+                None,
+                "before={before:?} after={after:?} text={text:?}"
+            );
+            assert_eq!(honest_terminal_count(outcome), None);
+        }
     }
 
     #[test]
