@@ -1348,6 +1348,10 @@ fn cgevent_type_verified(
     if batched {
         let web = || target_in_web_area(pid, element_ptr_and_idx, window_id);
         if let Some(done) = retype_from(outcome, text.chars().count(), is_terminal_target, web) {
+            let after = read_axvalue_bound(pid, element_ptr_and_idx, window_id);
+            if !appends_prefix(before, after.as_deref(), text, done) {
+                return Ok((false, None));
+            }
             let tail: String = text.chars().skip(done).collect();
             crate::input::keyboard::type_text_with_delay(pid, &tail, RETYPE_TAIL_DELAY_MS)?;
             let deadline = std::time::Instant::now() + DELIVERY_DRAIN_TIMEOUT;
@@ -1380,6 +1384,15 @@ fn retype_from(
         return None;
     };
     (done > 0 && done < total && !is_terminal_target && !is_web()).then_some(done)
+}
+
+fn appends_prefix(before: Option<&str>, after: Option<&str>, text: &str, done: usize) -> bool {
+    let (Some(before), Some(after)) = (before, after) else {
+        return false;
+    };
+    after
+        .strip_prefix(before)
+        .is_some_and(|added| added.chars().eq(text.chars().take(done)))
 }
 
 fn await_typed_delivery(
@@ -2809,6 +2822,43 @@ mod tests {
         assert_eq!(retype_from((true, Some(5)), 5, false, || false), None);
         assert_eq!(retype_from((false, None), 5, false, || false), None);
         assert_eq!(retype_from((false, Some(0)), 5, false, || false), None);
+    }
+
+    #[test]
+    fn a_first_character_per_event_read_back_is_not_retyped() {
+        let text = "abcdefghijklmnopq";
+        let outcome = await_typed_delivery(
+            Some(""),
+            text,
+            std::time::Instant::now(),
+            || Some("aq".to_owned()),
+            || false,
+        );
+        assert_eq!(outcome, (false, Some(2)));
+        let done = retype_from(outcome, text.chars().count(), false, || false);
+        assert_eq!(done, Some(2));
+        assert!(!appends_prefix(Some(""), Some("aq"), text, 2));
+    }
+
+    #[test]
+    fn a_partial_is_retyped_only_after_its_typed_prefix() {
+        for (before, after, done, appended) in [
+            (Some(""), Some("ab"), 2, true),
+            (Some("x"), Some("xab"), 2, true),
+            (Some("x"), Some("xé"), 1, false),
+            (Some("x"), Some("abx"), 2, false),
+            (Some(""), Some("ba"), 2, false),
+            (Some("x"), Some("yab"), 2, false),
+            (Some(""), Some("abc"), 2, false),
+            (None, Some("ab"), 2, false),
+            (Some(""), None, 2, false),
+        ] {
+            assert_eq!(
+                appends_prefix(before, after, "abcdef", done),
+                appended,
+                "before={before:?} after={after:?} done={done}"
+            );
+        }
     }
 
     #[test]
