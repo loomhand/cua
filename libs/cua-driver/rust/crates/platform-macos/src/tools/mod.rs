@@ -584,6 +584,7 @@ pub(crate) async fn acquire_key_scope(
 /// Refusal code when the addressed window cannot be confirmed as the app's
 /// key window: no key is sent, none could be proven to reach it.
 pub(crate) const WINDOW_NOT_KEY: &str = "window_not_key";
+const LOGINWINDOW_BUNDLE: &str = "com.apple.loginwindow";
 
 /// Acquire the per-PID mutation coordinator, gather fresh exact-target facts,
 /// and ask the pure core for one background decision. `element_ptr` must stay
@@ -619,12 +620,23 @@ pub(crate) async fn gate_background_keys(
 pub(crate) fn locked_input_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "boolean",
-        "description": "Send the keys even while the screen is locked. The lock hides the window from accessibility, so they go to the app's key window as it was before the lock, unverified. Default false: a locked screen refuses."
+        "description": "Send the keys even while the screen is locked. The lock hides the window from accessibility, so they go to the key window of the target pid's app as it was before the lock (for loginwindow's pid, to the lock screen), unverified. Default false: a locked screen refuses."
     })
 }
 
-/// Marks a keyboard result sent under a lock: unverified, nothing could be read.
-pub(crate) const UNDER_LOCK_NOTE: &str = " Sent while the screen is locked: the keys went to the app's key window as it was before the lock, and nothing could confirm them; check a window screenshot.";
+/// Marks a keyboard result sent under a lock with where the keys went: unverified, nothing could be read.
+pub(crate) fn under_lock_note(pid: i32) -> String {
+    under_lock_note_for(pid, crate::apps::bundle_id_for_pid(pid).as_deref())
+}
+
+fn under_lock_note_for(pid: i32, bundle_id: Option<&str>) -> String {
+    let to = if bundle_id == Some(LOGINWINDOW_BUNDLE) {
+        format!("the lock screen (loginwindow, pid {pid})")
+    } else {
+        format!("the key window of pid {pid} as it was before the lock")
+    };
+    format!(" Sent while the screen is locked: the keys went to {to}, and nothing could confirm them; check a screenshot.")
+}
 
 pub(crate) async fn acquire_background_mutation(pid: i32) -> BackgroundMutationLease {
     BackgroundMutationLease {
@@ -1707,5 +1719,29 @@ mod element_disabled_tests {
         let structured = result.structured_content.expect("structured");
         assert_eq!(structured["code"], "element_disabled");
         assert!(structured.get("escalation").is_none(), "{structured}");
+    }
+}
+
+#[cfg(test)]
+mod under_lock_note_tests {
+    use super::*;
+
+    #[test]
+    fn the_note_names_the_lock_screen_for_loginwindow_and_the_pid_for_an_app() {
+        let lock = under_lock_note_for(776, Some("com.apple.loginwindow"));
+        assert!(
+            lock.contains("went to the lock screen (loginwindow, pid 776)"),
+            "{lock}"
+        );
+        let app = under_lock_note_for(2040, Some("com.apple.TextEdit"));
+        assert!(
+            app.contains("went to the key window of pid 2040 as it was before the lock"),
+            "{app}"
+        );
+        assert!(!app.contains("lock screen"), "{app}");
+        assert_eq!(
+            under_lock_note_for(9, None),
+            under_lock_note_for(9, Some("x"))
+        );
     }
 }

@@ -541,9 +541,9 @@ impl Tool for PressKeyTool {
                 changes.add_window_identity(&mut structured);
                 let note = if under_lock {
                     structured["locked_input"] = true.into();
-                    super::UNDER_LOCK_NOTE
+                    super::under_lock_note(pid)
                 } else {
-                    ""
+                    String::new()
                 };
                 ToolResult::text(format!(
                     "✅ Pressed {display_key} on pid {pid}{label}.{note}{}",

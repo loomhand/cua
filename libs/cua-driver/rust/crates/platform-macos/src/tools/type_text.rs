@@ -508,7 +508,7 @@ impl Tool for TypeTextTool {
                     ("📨 Sent (unverified)", unconfirmed_note.to_owned())
                 };
                 let note = if under_lock {
-                    super::UNDER_LOCK_NOTE.to_owned()
+                    super::under_lock_note(pid)
                 } else if chromium_native_field && path == PATH_AX {
                     format!("{note}{CHROMIUM_NATIVE_FIELD_NOTE}")
                 } else {
