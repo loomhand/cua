@@ -185,7 +185,12 @@ has closed), and startup removes the pairs left by a driver that is gone. Only
 the value `1` turns it on, and it is read once per process; a daemon started
 without it keeps the pooling. Choose it when a master keyboard left on the
 server costs more than the Qt crash: Chrome on X11 drops core keyboard input,
-the user's typing included, while an extra master keyboard exists.
+the user's typing included, while an extra master keyboard exists. The flag
+does not shorten that time: a session's pair, and with it the Chrome loss,
+exists for the session's whole life, so a client that ends its input session
+right after each action keeps it short, and one that leaves sessions open keeps
+the pair up to the 30-minute idle timeout. That timeout also removes a pair
+whose click opened a popup that is still mapped, as before upstream #7358.
 
 ## Native application menus
 

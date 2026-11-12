@@ -210,7 +210,7 @@ static MPX_OP_LOCK: Mutex<()> = Mutex::new(());
 static MPX_LAST_USE: OnceLock<Mutex<HashMap<String, std::time::Instant>>> = OnceLock::new();
 static MPX_IDLE_REAPER: std::sync::Once = std::sync::Once::new();
 static MPX_CLICK_POPUPS: OnceLock<Mutex<HashMap<String, ClickPopups>>> = OnceLock::new();
-/// A session's master pair goes back to the pool after this much inactivity;
+/// A session's master pair is released after this much inactivity;
 /// `end_session` and the startup recovery cover the explicit and crash cases.
 /// Releasing unplugs the session's uinput slaves, and re-plugging them on the
 /// next action costs a hotplug (per-call churn crashes LibreOffice VCL), so
@@ -735,8 +735,8 @@ fn ensure_master_pointer_for_session(
     result
 }
 
-/// Plug in the session's uinput pointer, take a master pair from the pool
-/// (adding one only when none is free), and attach the pointer to it.
+/// Plug in the session's uinput pointer, take a master pair (from the pool unless
+/// [`REMOVE_MASTERS_ENV`] is `1`, else a fresh one), and attach the pointer to it.
 fn take_master_pair(display: *mut x11::xlib::Display, cursor_id: &str) -> Result<MasterPointerIds> {
     let mut major = 2;
     let mut minor = 3;
@@ -867,9 +867,9 @@ fn spawn_popup_waiter(cursor_id: String, remove_by: Instant) -> Result<()> {
     Ok(())
 }
 
-/// Hand the session's master pair back to the pool. The uinput slaves are
-/// unplugged (closing their fds removes them from the server), the pair's
-/// cursor is parked and its holder mark cleared; the pair itself stays.
+/// Release the session's master pair. The uinput slaves are unplugged (closing
+/// their fds removes them from the server), then the pair is pooled, its cursor
+/// parked and its holder mark cleared, or removed under [`REMOVE_MASTERS_ENV`].
 ///
 /// Unless [`REMOVE_MASTERS_ENV`] is `1`, never `XIRemoveMaster`: every Qt 6.5+ client on the
 /// display segfaults when any master device is removed (QTBUG-146876,
@@ -890,7 +890,7 @@ fn release_master_pair(cursor_id: &str) {
     tracing::debug!(
         cursor_id,
         pointer_id = ids.pointer_id,
-        "freed MPX master pair"
+        "released MPX master pair"
     );
     unsafe { x11::xlib::XCloseDisplay(display) };
 }
@@ -1198,15 +1198,22 @@ pub(crate) fn release_orphaned_master_pairs() {
                 read_holder_mark(display, pointer_id, atom).as_deref(),
                 &name,
             );
-            let creator_gone = mpx_owner::Owner::from_pointer_name(&name)
-                .is_some_and(|creator| creator.stale_in(&owner));
+            let creator_gone = || {
+                mpx_owner::Owner::from_pointer_name(&name)
+                    .is_some_and(|creator| creator.stale_in(&owner))
+            };
             if mode.reaps(&holder, |holder| holder.stale_in(&owner), creator_gone) {
                 mode.retire(display, pointer_id);
-                tracing::info!(
-                    device_id = pointer_id,
-                    ?mode,
-                    "retired orphaned Cua MPX master pair"
-                );
+                match mode {
+                    MasterMode::Pool => tracing::info!(
+                        device_id = pointer_id,
+                        "returned orphaned Cua MPX master pair to the pool"
+                    ),
+                    MasterMode::Remove => tracing::info!(
+                        device_id = pointer_id,
+                        "removed orphaned Cua MPX master pair"
+                    ),
+                }
             }
         }
         Ok(())
@@ -1249,18 +1256,20 @@ impl MasterMode {
         self,
         holder: &PairHolder,
         gone: impl Fn(&mpx_owner::Owner) -> bool,
-        creator_gone: bool,
+        creator_gone: impl FnOnce() -> bool,
     ) -> bool {
         match (self, holder) {
             (_, PairHolder::Owner(owner)) => gone(owner),
-            (Self::Remove, PairHolder::Free) => creator_gone,
+            (Self::Remove, PairHolder::Free) => creator_gone(),
             _ => false,
         }
     }
 
     fn retire(self, display: *mut x11::xlib::Display, pointer_id: i32) {
         if self.removes_on_release() {
-            let _ = remove_master_pointer(display, pointer_id);
+            if let Err(error) = remove_master_pointer(display, pointer_id) {
+                tracing::warn!(pointer_id, %error, "MPX master pair not removed");
+            }
         } else {
             free_master_pair(display, pointer_id);
         }
@@ -6712,7 +6721,7 @@ mod mpx_pool_tests {
     }
 
     #[test]
-    fn with_removal_on_a_session_adds_a_fresh_pair_and_removes_it_on_release() {
+    fn only_pool_mode_takes_from_the_pool_and_only_remove_mode_removes_on_release() {
         assert!(MasterMode::Pool.takes_from_pool());
         assert!(!MasterMode::Pool.removes_on_release());
         assert!(!MasterMode::Remove.takes_from_pool());
@@ -6724,17 +6733,18 @@ mod mpx_pool_tests {
     ) {
         let owner = this_process();
         let held = PairHolder::Owner(owner);
+        let unread = || -> bool { panic!("only a free pair under removal reads its creator") };
         for mode in [MasterMode::Pool, MasterMode::Remove] {
-            assert!(mode.reaps(&held, |_| true, false), "{mode:?}");
-            assert!(!mode.reaps(&held, |_| false, true), "{mode:?}");
+            assert!(mode.reaps(&held, |_| true, unread), "{mode:?}");
+            assert!(!mode.reaps(&held, |_| false, unread), "{mode:?}");
             assert!(
-                !mode.reaps(&PairHolder::Unknown, |_| true, true),
+                !mode.reaps(&PairHolder::Unknown, |_| true, unread),
                 "{mode:?}"
             );
         }
-        assert!(!MasterMode::Pool.reaps(&PairHolder::Free, |_| true, true));
-        assert!(MasterMode::Remove.reaps(&PairHolder::Free, |_| true, true));
-        assert!(!MasterMode::Remove.reaps(&PairHolder::Free, |_| true, false));
+        assert!(!MasterMode::Pool.reaps(&PairHolder::Free, |_| true, unread));
+        assert!(MasterMode::Remove.reaps(&PairHolder::Free, |_| true, || true));
+        assert!(!MasterMode::Remove.reaps(&PairHolder::Free, |_| true, || false));
     }
 
     /// trycua/cua#7325: removing any XI2 master device segfaults every running
@@ -6765,13 +6775,25 @@ mod mpx_pool_tests {
         }
         let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/input/mod.rs");
         let text = std::fs::read_to_string(&input).unwrap();
-        let line_of = |needle: &str| {
-            text.lines()
-                .position(|line| line.starts_with(needle))
-                .unwrap()
-                + 1
+        let lines: Vec<&str> = text.lines().collect();
+        let body = |head: &str, end: &str| {
+            let start = lines
+                .iter()
+                .position(|line| line.starts_with(head))
+                .unwrap();
+            let len = lines[start..].iter().position(|line| *line == end).unwrap();
+            start + 1..start + len + 2
         };
-        let opt_in = line_of("fn remove_master_pointer(")..line_of("fn create_uinput_pointer(");
+        let call = ["remove_master_", "pointer("].concat();
+        let opt_in = body(&format!("fn {call}"), "}");
+        let retire = body("    fn retire(", "    }");
+        let calls: Vec<usize> = (1..=lines.len())
+            .filter(|&n| lines[n - 1].contains(&call) && !opt_in.contains(&n))
+            .collect();
+        assert!(
+            calls.len() == 1 && retire.contains(&calls[0]),
+            "the opt-in removal is called only from MasterMode::retire: {calls:?}"
+        );
         offenders.retain(|at| {
             at.rsplit_once(':')
                 .filter(|(file, _)| std::path::Path::new(file) == input)
