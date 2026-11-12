@@ -1723,7 +1723,6 @@ async fn verified_hit_click(
     }
 }
 
-/// A refused warped click's own refusal, otherwise the error after sending.
 fn post_error(e: anyhow::Error) -> PostError {
     match crate::security_prompt::tool_result(&e) {
         Some(refusal) => PostError::Refused(Box::new(refusal)),
