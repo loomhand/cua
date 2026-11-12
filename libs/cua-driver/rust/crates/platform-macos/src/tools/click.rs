@@ -1671,6 +1671,7 @@ impl ClickTool {
 /// `click` with `verify_hit`: glides the cursor to the element, then fronts its
 /// window, hit-tests its centre and posts a left click there, back to back,
 /// only when the element on top is the element or inside it.
+#[allow(clippy::too_many_arguments)]
 async fn verified_hit_click(
     state: &ToolState,
     pid: i32,
