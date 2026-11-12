@@ -216,10 +216,12 @@ static MPX_CLICK_POPUPS: OnceLock<Mutex<HashMap<String, ClickPopups>>> = OnceLoc
 /// next action costs a hotplug (per-call churn crashes LibreOffice VCL), so
 /// the pair must outlive the inter-action idle of a live session; a long
 /// terminal-only stretch leaves the pointer unused far past a few minutes.
-/// Pairs are never removed; see [`release_master_pair`].
+/// Pairs are pooled unless [`REMOVE_MASTERS_ENV`] is `1`; see [`release_master_pair`].
 const MPX_IDLE_TTL: Duration = Duration::from_secs(1800);
 const MPX_IDLE_REAPER_PERIOD: Duration = Duration::from_secs(60);
 const MPX_POPUP_QUIET: Duration = Duration::from_millis(250);
+const REMOVE_MASTERS_ENV: &str = "CUA_DRIVER_RS_REMOVE_MPX_MASTERS";
+static MASTER_MODE: OnceLock<MasterMode> = OnceLock::new();
 static MPX_NAME_COUNTER: AtomicU64 = AtomicU64::new(1);
 // evdev 0.12.2 asserts `name.len() + 1 < UINPUT_MAX_NAME_SIZE` while building
 // a device. Linux defines UINPUT_MAX_NAME_SIZE as 80, leaving 78 usable bytes.
@@ -756,9 +758,14 @@ fn take_master_pair(display: *mut x11::xlib::Display, cursor_id: &str) -> Result
         x11::xinput2::XISlavePointer,
         Duration::from_secs(5),
     )?;
-    let pair = claim_master_pair(display, &base)?;
+    let mode = MasterMode::current();
+    let pair = if mode.takes_from_pool() {
+        claim_master_pair(display, &base)?
+    } else {
+        add_master_pair(display, &base)?
+    };
     if let Err(error) = attach_slave_to_master(display, slave_pointer_id, pair.pointer_id) {
-        free_master_pair(display, pair.pointer_id);
+        mode.retire(display, pair.pointer_id);
         return Err(error);
     }
     set_flat_pointer_accel(display, slave_pointer_id);
@@ -864,7 +871,7 @@ fn spawn_popup_waiter(cursor_id: String, remove_by: Instant) -> Result<()> {
 /// unplugged (closing their fds removes them from the server), the pair's
 /// cursor is parked and its holder mark cleared; the pair itself stays.
 ///
-/// Never `XIRemoveMaster` here or anywhere else: every Qt 6.5+ client on the
+/// Unless [`REMOVE_MASTERS_ENV`] is `1`, never `XIRemoveMaster`: every Qt 6.5+ client on the
 /// display segfaults when any master device is removed (QTBUG-146876,
 /// trycua/cua#7325), and mutter 42.x crashes on the hierarchy churn. Pairs
 /// live until the X server exits, as many as sessions that ever held one at
@@ -879,7 +886,7 @@ fn release_master_pair(cursor_id: &str) {
     let Ok(display) = open_display() else {
         return;
     };
-    free_master_pair(display, ids.pointer_id);
+    MasterMode::current().retire(display, ids.pointer_id);
     tracing::debug!(
         cursor_id,
         pointer_id = ids.pointer_id,
@@ -1094,35 +1101,40 @@ fn claim_master_pair(display: *mut x11::xlib::Display, base: &str) -> Result<Cla
             }
         }
 
-        let mut change = x11::xinput2::XIAnyHierarchyChangeInfo::default();
-        let name = CString::new(base)?;
-        unsafe {
-            let add = change.add();
-            (*add)._type = x11::xinput2::XIAddMaster;
-            (*add).name = name.as_ptr() as *mut _;
-            // Core events stay on so core-only apps (xterm, Tk, …) receive the
-            // drags too. Note this is not what makes the WM focus the dragged
-            // window — XI2-aware WMs grab buttons for XIAllMasterDevices — see
-            // the active-window save/restore in send_parallel_virtual_pointer_drags.
-            (*add).send_core = 1;
-            (*add).enable = 1;
-        }
-        let rc = unsafe { x11::xinput2::XIChangeHierarchy(display, &mut change, 1) };
-        unsafe { x11::xlib::XSync(display, 0) };
-        if rc != 0 {
-            bail!("XIChangeHierarchy(XIAddMaster) failed with status {rc}");
-        }
-        let pointer_name = master_pointer_device_name(base);
-        let (pointer_id, keyboard_id, _) = xi2_master_pointers(display)?
-            .into_iter()
-            .find(|(_, _, name)| *name == pointer_name)
-            .ok_or_else(|| anyhow!("failed to locate created master pointer '{pointer_name}'"))?;
-        write_holder_mark(display, pointer_id, atom, &mark);
-        Ok(ClaimedPair {
-            pointer_id,
-            keyboard_id,
-            added: true,
-        })
+        let pair = add_master_pair(display, base)?;
+        write_holder_mark(display, pair.pointer_id, atom, &mark);
+        Ok(pair)
+    })
+}
+
+fn add_master_pair(display: *mut x11::xlib::Display, base: &str) -> Result<ClaimedPair> {
+    let mut change = x11::xinput2::XIAnyHierarchyChangeInfo::default();
+    let name = CString::new(base)?;
+    unsafe {
+        let add = change.add();
+        (*add)._type = x11::xinput2::XIAddMaster;
+        (*add).name = name.as_ptr() as *mut _;
+        // Core events stay on so core-only apps (xterm, Tk, …) receive the
+        // drags too. Note this is not what makes the WM focus the dragged
+        // window — XI2-aware WMs grab buttons for XIAllMasterDevices — see
+        // the active-window save/restore in send_parallel_virtual_pointer_drags.
+        (*add).send_core = 1;
+        (*add).enable = 1;
+    }
+    let rc = unsafe { x11::xinput2::XIChangeHierarchy(display, &mut change, 1) };
+    unsafe { x11::xlib::XSync(display, 0) };
+    if rc != 0 {
+        bail!("XIChangeHierarchy(XIAddMaster) failed with status {rc}");
+    }
+    let pointer_name = master_pointer_device_name(base);
+    let (pointer_id, keyboard_id, _) = xi2_master_pointers(display)?
+        .into_iter()
+        .find(|(_, _, name)| *name == pointer_name)
+        .ok_or_else(|| anyhow!("failed to locate created master pointer '{pointer_name}'"))?;
+    Ok(ClaimedPair {
+        pointer_id,
+        keyboard_id,
+        added: true,
     })
 }
 
@@ -1157,7 +1169,7 @@ fn free_master_pair(display: *mut x11::xlib::Display, pointer_id: i32) {
 }
 
 /// Startup recovery: return pairs whose holder is provably gone (a driver
-/// that was killed) to the pool, parking their cursors. Nothing is removed.
+/// that was killed) to the pool, parking their cursors, or with [`REMOVE_MASTERS_ENV`] remove them.
 /// A PID alone cannot identify a holder on a shared/remote X server or across
 /// restarts, so only versioned, same-domain holders are considered.
 pub(crate) fn release_orphaned_master_pairs() {
@@ -1174,6 +1186,7 @@ pub(crate) fn release_orphaned_master_pairs() {
         return;
     };
     let atom = holder_atom(display);
+    let mode = MasterMode::current();
     // No network or arbitrary filesystem reads occur under this grab: holder
     // checks inspect local procfs and kill(pid, 0).
     let result = with_server_grabbed(display, || {
@@ -1185,11 +1198,14 @@ pub(crate) fn release_orphaned_master_pairs() {
                 read_holder_mark(display, pointer_id, atom).as_deref(),
                 &name,
             );
-            if matches!(&holder, PairHolder::Owner(holder) if holder.stale_in(&owner)) {
-                free_master_pair(display, pointer_id);
+            let creator_gone = mpx_owner::Owner::from_pointer_name(&name)
+                .is_some_and(|creator| creator.stale_in(&owner));
+            if mode.reaps(&holder, |holder| holder.stale_in(&owner), creator_gone) {
+                mode.retire(display, pointer_id);
                 tracing::info!(
                     device_id = pointer_id,
-                    "returned orphaned Cua MPX master pair to the pool"
+                    ?mode,
+                    "retired orphaned Cua MPX master pair"
                 );
             }
         }
@@ -1199,6 +1215,92 @@ pub(crate) fn release_orphaned_master_pairs() {
     if let Err(error) = result {
         tracing::warn!("MPX orphan recovery incomplete: {error}");
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MasterMode {
+    Pool,
+    Remove,
+}
+
+impl MasterMode {
+    fn current() -> Self {
+        *MASTER_MODE
+            .get_or_init(|| Self::from_env(std::env::var(REMOVE_MASTERS_ENV).ok().as_deref()))
+    }
+
+    fn from_env(value: Option<&str>) -> Self {
+        if value == Some("1") {
+            Self::Remove
+        } else {
+            Self::Pool
+        }
+    }
+
+    fn takes_from_pool(self) -> bool {
+        self == Self::Pool
+    }
+
+    fn removes_on_release(self) -> bool {
+        self == Self::Remove
+    }
+
+    fn reaps(
+        self,
+        holder: &PairHolder,
+        gone: impl Fn(&mpx_owner::Owner) -> bool,
+        creator_gone: bool,
+    ) -> bool {
+        match (self, holder) {
+            (_, PairHolder::Owner(owner)) => gone(owner),
+            (Self::Remove, PairHolder::Free) => creator_gone,
+            _ => false,
+        }
+    }
+
+    fn retire(self, display: *mut x11::xlib::Display, pointer_id: i32) {
+        if self.removes_on_release() {
+            let _ = remove_master_pointer(display, pointer_id);
+        } else {
+            free_master_pair(display, pointer_id);
+        }
+    }
+}
+
+fn remove_master_pointer(display: *mut x11::xlib::Display, pointer_id: i32) -> Result<()> {
+    let devices = xi2_query_devices(display)?;
+
+    let mut virtual_core_pointer = None;
+    let mut virtual_core_keyboard = None;
+    for (device_id, use_, device_name) in devices {
+        if device_name == "Virtual core pointer" && use_ == x11::xinput2::XIMasterPointer {
+            virtual_core_pointer = Some(device_id);
+        } else if device_name == "Virtual core keyboard" && use_ == x11::xinput2::XIMasterKeyboard {
+            virtual_core_keyboard = Some(device_id);
+        }
+    }
+
+    let (Some(return_pointer), Some(return_keyboard)) =
+        (virtual_core_pointer, virtual_core_keyboard)
+    else {
+        bail!("cannot remove MPX master without its virtual core return devices");
+    };
+
+    let mut change = x11::xinput2::XIAnyHierarchyChangeInfo::default();
+    unsafe {
+        let remove = change.remove();
+        (*remove)._type = x11::xinput2::XIRemoveMaster;
+        (*remove).deviceid = pointer_id;
+        (*remove).return_mode = x11::xinput2::XIAttachToMaster;
+        (*remove).return_pointer = return_pointer;
+        (*remove).return_keyboard = return_keyboard;
+        let rc = x11::xinput2::XIChangeHierarchy(display, &mut change, 1);
+        x11::xlib::XSync(display, 0);
+        if rc != 0 {
+            bail!("XIChangeHierarchy(XIRemoveMaster) failed with status {rc}");
+        }
+    }
+    Ok(())
 }
 
 fn create_uinput_pointer(name: &str) -> Result<VirtualDevice> {
@@ -6545,7 +6647,7 @@ mod type_pacing_tests {
 
 #[cfg(test)]
 mod mpx_pool_tests {
-    use super::{mpx_owner::Owner, pair_claimable, pair_holder, PairHolder};
+    use super::{mpx_owner::Owner, pair_claimable, pair_holder, MasterMode, PairHolder};
 
     fn this_process() -> Owner {
         Owner::current().expect("procfs identity")
@@ -6594,9 +6696,50 @@ mod mpx_pool_tests {
         }));
     }
 
+    #[test]
+    fn only_a_remove_mpx_masters_value_of_1_turns_removal_on() {
+        assert_eq!(MasterMode::from_env(Some("1")), MasterMode::Remove);
+        for value in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("true"),
+            Some("yes"),
+            Some(" 1"),
+        ] {
+            assert_eq!(MasterMode::from_env(value), MasterMode::Pool, "{value:?}");
+        }
+    }
+
+    #[test]
+    fn with_removal_on_a_session_adds_a_fresh_pair_and_removes_it_on_release() {
+        assert!(MasterMode::Pool.takes_from_pool());
+        assert!(!MasterMode::Pool.removes_on_release());
+        assert!(!MasterMode::Remove.takes_from_pool());
+        assert!(MasterMode::Remove.removes_on_release());
+    }
+
+    #[test]
+    fn the_startup_reaper_pools_gone_holders_and_with_removal_also_removes_free_pairs_of_gone_creators(
+    ) {
+        let owner = this_process();
+        let held = PairHolder::Owner(owner);
+        for mode in [MasterMode::Pool, MasterMode::Remove] {
+            assert!(mode.reaps(&held, |_| true, false), "{mode:?}");
+            assert!(!mode.reaps(&held, |_| false, true), "{mode:?}");
+            assert!(
+                !mode.reaps(&PairHolder::Unknown, |_| true, true),
+                "{mode:?}"
+            );
+        }
+        assert!(!MasterMode::Pool.reaps(&PairHolder::Free, |_| true, true));
+        assert!(MasterMode::Remove.reaps(&PairHolder::Free, |_| true, true));
+        assert!(!MasterMode::Remove.reaps(&PairHolder::Free, |_| true, false));
+    }
+
     /// trycua/cua#7325: removing any XI2 master device segfaults every running
-    /// Qt 6.5+ client on the display (QTBUG-146876). The driver must never
-    /// issue a master removal; pairs are pooled for the X server's lifetime.
+    /// Qt 6.5+ client on the display (QTBUG-146876). Only the opt-in removal
+    /// may issue one; by default pairs are pooled for the X server's lifetime.
     #[test]
     fn no_code_path_removes_an_xi2_master_device() {
         let forbidden = ["XIRemove", "Master"].concat();
@@ -6620,6 +6763,21 @@ mod mpx_pool_tests {
                 }
             }
         }
+        let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/input/mod.rs");
+        let text = std::fs::read_to_string(&input).unwrap();
+        let line_of = |needle: &str| {
+            text.lines()
+                .position(|line| line.starts_with(needle))
+                .unwrap()
+                + 1
+        };
+        let opt_in = line_of("fn remove_master_pointer(")..line_of("fn create_uinput_pointer(");
+        offenders.retain(|at| {
+            at.rsplit_once(':')
+                .filter(|(file, _)| std::path::Path::new(file) == input)
+                .and_then(|(_, line)| line.parse::<usize>().ok())
+                .is_none_or(|line| !opt_in.contains(&line))
+        });
         assert!(
             offenders.is_empty(),
             "XI2 master removal crashes Qt 6.5+ apps (#7325): {offenders:?}"
