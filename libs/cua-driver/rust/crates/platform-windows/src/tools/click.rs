@@ -29,7 +29,9 @@ async fn verified_hit_click(
     count: usize,
     cursor_key: &str,
 ) -> ToolResult {
-    use cua_driver_core::hit_check::{checked_click, hit_refusal, Hit, HIT_CHECK_UNAVAILABLE};
+    use cua_driver_core::hit_check::{
+        checked_click, hit_refusal, Hit, PostError, HIT_CHECK_UNAVAILABLE,
+    };
 
     let Some(element) = admitted.clone().filter(|e| e.is_uia()) else {
         return hit_refusal(
@@ -74,7 +76,7 @@ async fn verified_hit_click(
             },
             |(x, y)| {
                 crate::input::send_click_synthesized_positioned(hwnd, x, y, count)
-                    .map_err(|e| e.to_string())
+                    .map_err(|e| PostError::Sent(e.to_string()))
             },
         )
     })
