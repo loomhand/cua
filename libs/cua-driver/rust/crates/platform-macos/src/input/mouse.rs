@@ -208,6 +208,7 @@ pub fn warp_cursor_for_click(x: f64, y: f64) {
     std::thread::sleep(std::time::Duration::from_millis(40));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn click_at_xy_desktop_inner(
     prompt: PromptInput,
     x: f64,
