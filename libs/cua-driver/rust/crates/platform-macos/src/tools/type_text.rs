@@ -1930,9 +1930,7 @@ fn type_text_in_key_window(
                         "the field did not read back the inserted line"
                     };
                     return Ok(TypeTextDelivery::Typed(TypeTextOutcome {
-                        detail: format!(
-                            " into{target}; Return was not sent because {reason}"
-                        ),
+                        detail: format!(" into{target}; Return was not sent because {reason}"),
                         path: PATH_AX,
                         verified: false,
                         // Without proof the line landed, no count is claimed.
