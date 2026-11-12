@@ -173,6 +173,20 @@ application's window (a drag dropped onto VLC) reports that window's title
 change and the windows its pid opened as `foreign_window` / `window_change`
 evidence; the focus guard alone only watches the target pid.
 
+**Master pairs.** Background pointer and key input takes an XInput2 master
+pair (a pointer and a keyboard) for its session. By default the pairs are
+pooled: when a session ends or stays idle, its pair is parked and kept for the
+X server's lifetime, because removing a master device crashes every running
+Qt 6.5+ client (QTBUG-146876, #7325). With `CUA_DRIVER_RS_REMOVE_MPX_MASTERS=1`
+in the environment of `cua-driver serve`, the pairs this driver takes are
+removed when released, never pooled: each session adds a fresh pair, the pair
+is removed when the session ends or stays idle (after a popup its click opened
+has closed), and startup removes the pairs left by a driver that is gone. Only
+the value `1` turns it on, and it is read once per process; a daemon started
+without it keeps the pooling. Choose it when a master keyboard left on the
+server costs more than the Qt crash: Chrome on X11 drops core keyboard input,
+the user's typing included, while an extra master keyboard exists.
+
 ## Native application menus
 
 Use `invoke_menu({pid, window_id, path:[...]})` for a known GTK/Qt application
