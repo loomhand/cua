@@ -13,11 +13,8 @@ pub const HIT_CHECK_UNAVAILABLE: &str = "hit_check_unavailable";
 /// The refusal code when the target's window does not come to the front.
 pub const FOREGROUND_UNAVAILABLE: &str = "foreground_unavailable";
 
-/// Why a `verify_hit` click's post failed.
 pub enum PostError {
-    /// Refused before any event was sent; returned as it is.
     Refused(Box<ToolResult>),
-    /// Failed after the click was sent.
     Sent(String),
 }
 
