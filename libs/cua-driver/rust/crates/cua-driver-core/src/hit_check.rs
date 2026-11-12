@@ -13,6 +13,14 @@ pub const HIT_CHECK_UNAVAILABLE: &str = "hit_check_unavailable";
 /// The refusal code when the target's window does not come to the front.
 pub const FOREGROUND_UNAVAILABLE: &str = "foreground_unavailable";
 
+/// Why a `verify_hit` click's post failed.
+pub enum PostError {
+    /// Refused before any event was sent; returned as it is.
+    Refused(Box<ToolResult>),
+    /// Failed after the click was sent.
+    Sent(String),
+}
+
 /// What the hit test at the target's centre found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
@@ -32,7 +40,7 @@ pub fn checked_click<P: Copy + std::fmt::Debug>(
     front: impl FnOnce() -> bool,
     centre: impl FnOnce() -> Result<Option<P>, ()>,
     hit: impl FnOnce(P) -> Hit,
-    post: impl FnOnce(P) -> Result<(), String>,
+    post: impl FnOnce(P) -> Result<(), PostError>,
 ) -> Result<P, ToolResult> {
     if !front() {
         return Err(hit_refusal(
@@ -75,10 +83,11 @@ pub fn checked_click<P: Copy + std::fmt::Debug>(
             ))
         }
     }
-    post(at).map_err(|e| {
-        ToolResult::error(format!(
+    post(at).map_err(|e| match e {
+        PostError::Refused(refusal) => *refusal,
+        PostError::Sent(e) => ToolResult::error(format!(
             "click.verify_hit: the click at {at:?} failed after it was sent: {e}"
-        ))
+        )),
     })?;
     Ok(at)
 }
@@ -156,7 +165,7 @@ mod tests {
     fn run(
         front: bool,
         hit: Hit,
-        post: Result<(), String>,
+        post: Result<(), PostError>,
     ) -> (Result<(i32, i32), ToolResult>, Vec<&'static str>) {
         let steps = std::cell::RefCell::new(Vec::new());
         let out = checked_click(
@@ -261,9 +270,25 @@ mod tests {
 
     #[test]
     fn a_click_that_failed_after_sending_is_an_error_not_a_refusal() {
-        let (out, steps) = run(true, Hit::Target, Err("mouse up".to_owned()));
+        let (out, steps) = run(
+            true,
+            Hit::Target,
+            Err(PostError::Sent("mouse up".to_owned())),
+        );
         assert_eq!(steps, ["front", "centre", "hit", "post"]);
         assert_eq!(code(&out), serde_json::Value::Null);
+    }
+
+    #[test]
+    fn a_post_refused_before_sending_returns_its_own_refusal() {
+        let refusal = hit_refusal("prompt", "nothing was sent".to_owned());
+        let (out, steps) = run(
+            true,
+            Hit::Target,
+            Err(PostError::Refused(Box::new(refusal))),
+        );
+        assert_eq!(steps, ["front", "centre", "hit", "post"]);
+        assert_eq!(code(&out), serde_json::json!("prompt"));
     }
 
     #[test]
