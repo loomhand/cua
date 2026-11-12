@@ -618,6 +618,21 @@ struct ChromiumClickRouteStep {
     delay_after_ms: u64,
 }
 
+/// Whether WindowServer hands the `CGEventSetWindowLocation` stamp of a
+/// pid-routed click to the target as its window-local point. macOS 27 does:
+/// a screen-point stamp arrives as `locationInWindow == (screen_x, height -
+/// screen_y)`, so the click lands shifted by the window's origin (AppKit,
+/// Chromium and GPUI windows alike). Earlier releases derived the local point
+/// from the screen stamp themselves.
+fn window_location_is_window_local() -> bool {
+    static WINDOW_LOCAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *WINDOW_LOCAL.get_or_init(|| {
+        crate::tools::macos_product_version()
+            .and_then(|version| version.split('.').next()?.parse::<u32>().ok())
+            .is_some_and(|major| major >= 27)
+    })
+}
+
 fn chromium_click_route_plan(
     screen_x: f64,
     screen_y: f64,
