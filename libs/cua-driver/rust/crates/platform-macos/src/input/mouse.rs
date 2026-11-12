@@ -2579,7 +2579,7 @@ mod tests {
     fn hid_pointer_primitives_send_nothing_onto_a_security_prompt() {
         use crate::security_prompt::{fixture::PromptShown, PromptProtected};
         type Primitive = fn(PromptInput) -> anyhow::Result<()>;
-        let primitives: [(&str, Primitive); 7] = [
+        let primitives: [(&str, Primitive); 8] = [
             ("click_at_xy_desktop", |prompt| {
                 click_at_xy_desktop(prompt, 5.0, 5.0, 1, "left")
             }),
@@ -2601,6 +2601,9 @@ mod tests {
             ),
             ("click_at_xy_desktop_preserving_cursor", |prompt| {
                 click_at_xy_desktop_preserving_cursor(prompt, 5.0, 5.0)
+            }),
+            ("click_at_warped_xy_desktop", |prompt| {
+                click_at_warped_xy_desktop(prompt, 5.0, 5.0, 1)
             }),
             ("scroll_wheel_desktop", |prompt| {
                 scroll_wheel_desktop(prompt, 5.0, 5.0, -12, 0, 1)

@@ -20,7 +20,7 @@
 use async_trait::async_trait;
 use cua_driver_contract::ClickButton;
 use cua_driver_core::{
-    hit_check::{checked_click, first_matching_ancestor, Hit, MAX_HIT_DEPTH},
+    hit_check::{checked_click, first_matching_ancestor, Hit, PostError, MAX_HIT_DEPTH},
     protocol::ToolResult,
     tool::{Tool, ToolDef},
     tool_args::parse_legacy_click_input,
@@ -1709,7 +1709,7 @@ async fn verified_hit_click(
             |(x, y)| hit_at(target, x, y),
             |(x, y)| {
                 crate::input::mouse::click_at_warped_xy_desktop(prompt, x, y, count)
-                    .map_err(|e| e.to_string())
+                    .map_err(post_error)
             },
         )
     })
@@ -1729,6 +1729,14 @@ async fn verified_hit_click(
         }
         Ok(Err(refusal)) => refusal,
         Err(e) => ToolResult::error(format!("task error: {e}")),
+    }
+}
+
+/// A refused warped click's own refusal, otherwise the error after sending.
+fn post_error(e: anyhow::Error) -> PostError {
+    match crate::security_prompt::tool_result(&e) {
+        Some(refusal) => PostError::Refused(Box::new(refusal)),
+        None => PostError::Sent(e.to_string()),
     }
 }
 
@@ -2358,6 +2366,25 @@ fn validate_click_action(action: &str, element_target: bool) -> anyhow::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_verify_hit_click_refused_by_a_security_prompt_says_nothing_was_sent() {
+        let refused = anyhow::Error::new(crate::security_prompt::PromptProtected {
+            owner: "SecurityAgent".to_owned(),
+        });
+        let PostError::Refused(result) = post_error(refused) else {
+            panic!("a prompt refusal is not an error after sending");
+        };
+        let structured = result.structured_content.expect("structured refusal");
+        assert_eq!(structured["refusal"]["code"], "security_prompt_protected");
+        assert!(structured["refusal"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("nothing was sent")));
+        assert!(matches!(
+            post_error(anyhow::anyhow!("mouse up")),
+            PostError::Sent(e) if e == "mouse up"
+        ));
+    }
 
     /// The pixel focus rung keeps working after unknown AX action names
     /// started refusing: background pixel typing into Electron depended on it.
