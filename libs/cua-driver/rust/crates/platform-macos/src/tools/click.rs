@@ -1969,6 +1969,9 @@ async fn verified_hit_click(
             },
             |(x, y)| hit_at(target, x, y),
             |(x, y)| {
+                if !element.observed_identity_is_current() {
+                    return Err(PostError::Refused(Box::new(identity_refusal())));
+                }
                 crate::input::mouse::click_at_warped_xy_desktop(prompt, x, y, count)
                     .map_err(post_error)
             },
