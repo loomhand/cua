@@ -826,6 +826,19 @@ impl ClickTool {
             (element_index, window_id, element_guard)
         {
             if verify_hit {
+                let identity_guard = element_guard.clone();
+                let identity_current = tokio::task::spawn_blocking(move || {
+                    identity_guard.observed_identity_is_current()
+                })
+                .await
+                .unwrap_or(false);
+                if !identity_current {
+                    let message = cua_driver_core::element_token::STALE_TOKEN_ERROR;
+                    return ToolResult::error(message).with_structured(serde_json::json!({
+                        "status": "refused",
+                        "refusal": { "code": "stale_element_token", "message": message }
+                    }));
+                }
                 return verified_hit_click(
                     &self.state,
                     pid,
