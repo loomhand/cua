@@ -141,6 +141,7 @@ mod frame_geometry {
     }
 }
 
+use crate::capture_source::CaptureSource;
 use frame_geometry::FrameGeometry;
 
 /// After GetDIBits we have BGRA bytes from PrintWindow. If essentially every
@@ -512,15 +513,7 @@ unsafe fn screenshot_via_screen_region(hwnd: HWND) -> Result<(Vec<u8>, i32, i32,
 
 /// Capture a window by HWND, returning raw PNG bytes.
 pub fn screenshot_window_bytes(hwnd: u64) -> Result<Vec<u8>> {
-    let (bytes, occluded) = screenshot_window_bytes_with_occlusion(hwnd)?;
-    if occluded {
-        bail!(
-            "cannot capture occluded window 0x{hwnd:x}: screen-region fallback \
-               contains covering-window pixels. Call bring_to_front with this \
-               window_id and take a fresh snapshot, or use get_desktop_state."
-        );
-    }
-    Ok(bytes)
+    screenshot_window_bytes_with_source(hwnd).map(|(bytes, _)| bytes)
 }
 
 /// Capture a window by HWND. Returns `(png_bytes, occluded_flag)` — the
@@ -531,7 +524,19 @@ pub fn screenshot_window_bytes(hwnd: u64) -> Result<Vec<u8>> {
 /// user / LLM should attach an explicit warning. See `target_is_obscured`
 /// for the sampling heuristic.
 pub fn screenshot_window_bytes_with_occlusion(hwnd: u64) -> Result<(Vec<u8>, bool)> {
-    screenshot_window_mapped(hwnd).map(|(png, occluded, _)| (png, occluded))
+    screenshot_window_mapped(hwnd).map(|(png, source, _)| (png, source.occluded()))
+}
+
+pub(crate) fn screenshot_window_bytes_with_source(hwnd: u64) -> Result<(Vec<u8>, CaptureSource)> {
+    let (bytes, source, _) = screenshot_window_mapped(hwnd)?;
+    if source.occluded() {
+        bail!(
+            "cannot capture occluded window 0x{hwnd:x}: screen-region fallback \
+               contains covering-window pixels. Call bring_to_front with this \
+               window_id and take a fresh snapshot, or use get_desktop_state."
+        );
+    }
+    Ok((bytes, source))
 }
 
 /// Capture the final input point against the exact source frame. WGC frame
@@ -541,15 +546,15 @@ pub(crate) fn screenshot_window_click_target(
     screen_x: i32,
     screen_y: i32,
 ) -> Option<(Vec<u8>, f64, f64)> {
-    let (png, occluded, geometry) = screenshot_window_mapped(hwnd).ok()?;
-    if occluded {
+    let (png, source, geometry) = screenshot_window_mapped(hwnd).ok()?;
+    if source.occluded() {
         return None;
     }
     let (x, y) = geometry?.local_point(screen_x, screen_y)?;
     Some((png, x, y))
 }
 
-fn screenshot_window_mapped(hwnd: u64) -> Result<(Vec<u8>, bool, Option<FrameGeometry>)> {
+fn screenshot_window_mapped(hwnd: u64) -> Result<(Vec<u8>, CaptureSource, Option<FrameGeometry>)> {
     match unsafe { screenshot_window_bytes_with_occlusion_unsafe(hwnd) } {
         Ok(capture) => Ok(capture),
         Err(primary_error) => {
@@ -563,7 +568,7 @@ fn screenshot_window_mapped(hwnd: u64) -> Result<(Vec<u8>, bool, Option<FrameGeo
             match screenshot_window_via_wgc_checked(hwnd) {
                 Ok((pixels, width, height, geometry)) => Ok((
                     cua_driver_core::image_utils::encode_bgra_to_png(&pixels, width, height)?,
-                    false,
+                    CaptureSource::Window,
                     Some(geometry),
                 )),
                 Err(wgc_error) => {
@@ -580,7 +585,7 @@ fn screenshot_window_mapped(hwnd: u64) -> Result<(Vec<u8>, bool, Option<FrameGeo
                                 width as u32,
                                 height as u32,
                             )?,
-                            occluded,
+                            CaptureSource::Screen { occluded },
                             Some(geometry),
                         )),
                         Err(screen_error) => Err(primary_error.context(format!(
@@ -610,7 +615,7 @@ pub fn screenshot_window(hwnd: u64) -> Result<(String, u32, u32)> {
 
 unsafe fn screenshot_window_bytes_with_occlusion_unsafe(
     hwnd: u64,
-) -> Result<(Vec<u8>, bool, Option<FrameGeometry>)> {
+) -> Result<(Vec<u8>, CaptureSource, Option<FrameGeometry>)> {
     use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsIconic};
 
@@ -655,7 +660,7 @@ unsafe fn screenshot_window_bytes_with_occlusion_unsafe(
             Ok((pixels, w, h, geometry)) => {
                 return Ok((
                     cua_driver_core::image_utils::encode_bgra_to_png(&pixels, w, h)?,
-                    false, // WGC reads target's own pixels — never occluded by definition
+                    CaptureSource::Window, // WGC reads target's own pixels — never occluded by definition
                     Some(geometry),
                 ));
             }
@@ -672,7 +677,7 @@ unsafe fn screenshot_window_bytes_with_occlusion_unsafe(
             Ok((pixels, w, h, geometry)) => {
                 return Ok((
                     cua_driver_core::image_utils::encode_bgra_to_png(&pixels, w as u32, h as u32)?,
-                    occluded,
+                    CaptureSource::Screen { occluded },
                     Some(geometry),
                 ));
             }
@@ -830,7 +835,7 @@ unsafe fn screenshot_window_bytes_with_occlusion_unsafe(
             Ok((alt_pixels, w, h, geometry)) => {
                 return Ok((
                     cua_driver_core::image_utils::encode_bgra_to_png(&alt_pixels, w, h)?,
-                    false,
+                    CaptureSource::Window,
                     Some(geometry),
                 ));
             }
@@ -851,7 +856,7 @@ unsafe fn screenshot_window_bytes_with_occlusion_unsafe(
                         alt_w as u32,
                         alt_h as u32,
                     )?,
-                    occluded,
+                    CaptureSource::Screen { occluded },
                     Some(geometry),
                 ));
             }
@@ -874,7 +879,7 @@ unsafe fn screenshot_window_bytes_with_occlusion_unsafe(
     // occluded warning needed on this path.
     Ok((
         cua_driver_core::image_utils::encode_bgra_to_png(&pixels, w as u32, h as u32)?,
-        false,
+        CaptureSource::Window,
         (!mostly_black).then_some(cropped_geometry),
     ))
 }
