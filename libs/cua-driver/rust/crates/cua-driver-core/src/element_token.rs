@@ -253,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn each_counter_start_is_drawn_at_random() {
+    fn each_seed_differs_from_the_one_before() {
         assert_ne!(snapshot_seed(), snapshot_seed());
     }
 
