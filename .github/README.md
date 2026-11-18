@@ -14,11 +14,11 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 
 | Patch | Upstream |
 |---|---|
-| rebase Chromium screen extents only from a frame the size of the target window | [#5414](https://github.com/trycua/cua/pull/5414) |
-| Windows: wait 40 ms after a foreground desktop click, as after a background one | [#5410](https://github.com/trycua/cua/pull/5410) |
-| macOS: bring_to_front returns at once when the exact window is already the focused frontmost window | [#5411](https://github.com/trycua/cua/pull/5411) |
-| macOS: bring_to_front skips activation only when AppKit agrees the target is frontmost | [#5411](https://github.com/trycua/cua/pull/5411) |
-| Windows: a desktop click that closes its own target window succeeds | [#5412](https://github.com/trycua/cua/pull/5412) |
+| rebase Chromium screen extents only from a frame the size of the target window | [#5414](https://github.com/trycua/cua/pull/5414), salvaged as [#8167](https://github.com/trycua/cua/pull/8167) |
+| Windows: wait 40 ms after a foreground desktop click, as after a background one | [#5410](https://github.com/trycua/cua/pull/5410), salvaged as [#8160](https://github.com/trycua/cua/pull/8160) |
+| macOS: bring_to_front returns at once when the exact window is already the focused frontmost window | [#5411](https://github.com/trycua/cua/pull/5411), salvaged as [#8163](https://github.com/trycua/cua/pull/8163) |
+| macOS: bring_to_front skips activation only when AppKit agrees the target is frontmost | [#5411](https://github.com/trycua/cua/pull/5411), salvaged as [#8163](https://github.com/trycua/cua/pull/8163) |
+| Windows: a desktop click that closes its own target window succeeds | [#5412](https://github.com/trycua/cua/pull/5412), salvaged as [#8166](https://github.com/trycua/cua/pull/8166) |
 | macOS and Windows: `click` with `verify_hit` fronts an element's window and posts a pixel click at its centre only when the hit test there finds the element, and on macOS like any desktop click refuses a point on a security or consent prompt (upstream [#7338](https://github.com/trycua/cua/pull/7338)); a Linux `click` refuses `verify_hit` as an unknown argument | RFC [#6031](https://github.com/trycua/cua/issues/6031) |
 | macOS: background text to kitty goes in as an AXValue write, which kitty commits to its pty without a key window; a blank kitty read-back is unverified, not zero delivered | [#6029](https://github.com/trycua/cua/pull/6029) |
 | macOS: find a window on another Space through the app's focused and main window before the remote-token probe, and note when an own-renderer app's off-Space pixels are stale | [#6030](https://github.com/trycua/cua/pull/6030) |
@@ -44,12 +44,12 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | Linux: a window capture reads only the part of the window on the screen and pads the rest black, so a window past the screen edge no longer fails with BadMatch | the same fix is third-party [#5742](https://github.com/trycua/cua/pull/5742) |
 | Linux: with `CUA_DRIVER_RS_REMOVE_MPX_MASTERS=1` in the daemon's environment, the XInput2 master pairs the driver takes are removed when released, never pooled, as before upstream [#7358](https://github.com/trycua/cua/pull/7358): each session adds a fresh pair, end_session, the idle teardown and the popup waiter remove it, a failed attach removes it, and startup removes pairs whose holder, or whose free pair's creator, is gone; unset, upstream's pooling is unchanged. Removal crashes running Qt 6.5+ apps ([#7325](https://github.com/trycua/cua/issues/7325)); a pooled master keyboard makes Chrome on X11 drop core keyboard input | [#7501](https://github.com/trycua/cua/pull/7501) |
 | Linux: a window whose frame matches the window geometry exactly, while no other frame does, is named without the 24 px margin, so cascaded same-size windows of one pid (Chrome) no longer fall back to a walk of the whole application | [#6983](https://github.com/trycua/cua/pull/6983) |
-| macOS: the permission guide, its banner and its status lines name the app the driver runs in (the shown name of the nearest enclosing .app), else Cua Driver | [#6985](https://github.com/trycua/cua/pull/6985) |
-| macOS: the permission guide opens at the left edge of the visible frame, clear of the Settings switches and the access prompt | [#6984](https://github.com/trycua/cua/pull/6984) |
-| macOS: a batched `type_text` is retyped only when a native field shows its old value followed by the text's first characters, never in a terminal, and an unconfirmed terminal insert reports no delivered count; a field that showed no change is not retyped here, while the upstream pull request keeps upstream's retype of it | [#7276](https://github.com/trycua/cua/pull/7276) |
+| macOS: the permission guide, its banner and its status lines name the app the driver runs in (the shown name of the nearest enclosing .app), else Cua Driver | [#6985](https://github.com/trycua/cua/pull/6985), salvaged as [#8123](https://github.com/trycua/cua/pull/8123) |
+| macOS: the permission guide opens at the left edge of the visible frame, clear of the Settings switches and the access prompt | [#6984](https://github.com/trycua/cua/pull/6984), salvaged as [#8121](https://github.com/trycua/cua/pull/8121) |
+| macOS: a batched `type_text` is retyped only when a native field shows its old value followed by the text's first characters, never in a terminal, and an unconfirmed terminal insert reports no delivered count; a field that showed no change is not retyped here, while the upstream pull request keeps upstream's retype of it | [#7276](https://github.com/trycua/cua/pull/7276), salvaged as [#8128](https://github.com/trycua/cua/pull/8128) |
 | macOS: an unconfirmed terminal insert says a terminal may not echo what it reads and the text must not be typed again, with no foreground escalation | [#7277](https://github.com/trycua/cua/pull/7277) |
 | macOS: a read-back that changed without growing is unverifiable; an `AXSelectedText` write that changed the field is not followed by keys, and the key rung gives up once the value stops moving | issue [#7244](https://github.com/trycua/cua/issues/7244) |
-| macOS: a terminal confirms typed text only by a copy its scrollback did not already hold, and never when its value could not be read before the keys | [#7278](https://github.com/trycua/cua/pull/7278) |
+| macOS: a terminal confirms typed text only by a copy its scrollback did not already hold, and never when its value could not be read before the keys | [#7278](https://github.com/trycua/cua/pull/7278), salvaged as [#8130](https://github.com/trycua/cua/pull/8130) |
 
 Before a box image moves its cua-driver pin to `dev`:
 
