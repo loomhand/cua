@@ -50,6 +50,8 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | macOS: an unconfirmed terminal insert says a terminal may not echo what it reads and the text must not be typed again, with no foreground escalation | [#7277](https://github.com/trycua/cua/pull/7277) |
 | macOS: a read-back that changed without growing is unverifiable; an `AXSelectedText` write that changed the field is not followed by keys, and the key rung gives up once the value stops moving | issue [#7244](https://github.com/trycua/cua/issues/7244) |
 | macOS: a terminal confirms typed text only by a copy its scrollback did not already hold, and never when its value could not be read before the keys | [#7278](https://github.com/trycua/cua/pull/7278), salvaged as [#8130](https://github.com/trycua/cua/pull/8130) |
+| Windows: `get_window_state` sets `screenshot_composited: true`, as the Linux driver does, when PrintWindow and Windows Graphics Capture both failed and the window image is a copy of its screen region, which shows any window over it | not yet offered upstream |
+| all platforms: the `element_token` snapshot counter starts at a random value in each driver process, so a token kept across a driver restart is refused as stale instead of naming a row of a newer snapshot with the same id | not yet offered upstream |
 
 Before a box image moves its cua-driver pin to `dev`:
 
