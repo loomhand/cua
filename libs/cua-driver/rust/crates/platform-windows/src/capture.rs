@@ -140,6 +140,7 @@ mod frame_geometry {
     }
 }
 
+use crate::capture_source::CaptureSource;
 use frame_geometry::FrameGeometry;
 
 /// After GetDIBits we have BGRA bytes from PrintWindow. If essentially every
@@ -344,7 +345,11 @@ pub fn screenshot_window_bytes(hwnd: u64) -> Result<Vec<u8>> {
 /// user / LLM should attach an explicit warning. See `target_is_obscured`
 /// for the sampling heuristic.
 pub fn screenshot_window_bytes_with_occlusion(hwnd: u64) -> Result<(Vec<u8>, bool)> {
-    screenshot_window_mapped(hwnd).map(|(png, occluded, _)| (png, occluded))
+    screenshot_window_bytes_with_source(hwnd).map(|(png, source)| (png, source.occluded()))
+}
+
+pub(crate) fn screenshot_window_bytes_with_source(hwnd: u64) -> Result<(Vec<u8>, CaptureSource)> {
+    screenshot_window_mapped(hwnd).map(|(png, source, _)| (png, source))
 }
 
 /// Capture the final input point against the exact source frame. WGC supplies
@@ -354,15 +359,15 @@ pub(crate) fn screenshot_window_click_target(
     screen_x: i32,
     screen_y: i32,
 ) -> Option<(Vec<u8>, f64, f64)> {
-    let (png, occluded, geometry) = screenshot_window_mapped(hwnd).ok()?;
-    if occluded {
+    let (png, source, geometry) = screenshot_window_mapped(hwnd).ok()?;
+    if source.occluded() {
         return None;
     }
     let (x, y) = geometry?.local_point(screen_x, screen_y)?;
     Some((png, x, y))
 }
 
-fn screenshot_window_mapped(hwnd: u64) -> Result<(Vec<u8>, bool, Option<FrameGeometry>)> {
+fn screenshot_window_mapped(hwnd: u64) -> Result<(Vec<u8>, CaptureSource, Option<FrameGeometry>)> {
     match unsafe { screenshot_window_bytes_with_occlusion_unsafe(hwnd) } {
         Ok(capture) => Ok(capture),
         Err(primary_error) => {
@@ -376,7 +381,7 @@ fn screenshot_window_mapped(hwnd: u64) -> Result<(Vec<u8>, bool, Option<FrameGeo
             match crate::wgc::screenshot_window_via_wgc(hwnd) {
                 Ok((pixels, width, height)) => Ok((
                     cua_driver_core::image_utils::encode_bgra_to_png(&pixels, width, height)?,
-                    false,
+                    CaptureSource::Window,
                     None,
                 )),
                 Err(wgc_error) => {
@@ -393,7 +398,7 @@ fn screenshot_window_mapped(hwnd: u64) -> Result<(Vec<u8>, bool, Option<FrameGeo
                                 width as u32,
                                 height as u32,
                             )?,
-                            occluded,
+                            CaptureSource::Screen { occluded },
                             Some(geometry),
                         )),
                         Err(screen_error) => Err(primary_error.context(format!(
@@ -423,7 +428,7 @@ pub fn screenshot_window(hwnd: u64) -> Result<(String, u32, u32)> {
 
 unsafe fn screenshot_window_bytes_with_occlusion_unsafe(
     hwnd: u64,
-) -> Result<(Vec<u8>, bool, Option<FrameGeometry>)> {
+) -> Result<(Vec<u8>, CaptureSource, Option<FrameGeometry>)> {
     use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsIconic};
 
@@ -468,7 +473,7 @@ unsafe fn screenshot_window_bytes_with_occlusion_unsafe(
             Ok((pixels, w, h)) => {
                 return Ok((
                     cua_driver_core::image_utils::encode_bgra_to_png(&pixels, w, h)?,
-                    false, // WGC reads target's own pixels — never occluded by definition
+                    CaptureSource::Window, // WGC reads target's own pixels — never occluded by definition
                     None,
                 ));
             }
@@ -485,7 +490,7 @@ unsafe fn screenshot_window_bytes_with_occlusion_unsafe(
             Ok((pixels, w, h, geometry)) => {
                 return Ok((
                     cua_driver_core::image_utils::encode_bgra_to_png(&pixels, w as u32, h as u32)?,
-                    occluded,
+                    CaptureSource::Screen { occluded },
                     Some(geometry),
                 ));
             }
@@ -643,7 +648,7 @@ unsafe fn screenshot_window_bytes_with_occlusion_unsafe(
             Ok((alt_pixels, w, h)) => {
                 return Ok((
                     cua_driver_core::image_utils::encode_bgra_to_png(&alt_pixels, w, h)?,
-                    false,
+                    CaptureSource::Window,
                     None,
                 ));
             }
@@ -664,7 +669,7 @@ unsafe fn screenshot_window_bytes_with_occlusion_unsafe(
                         alt_w as u32,
                         alt_h as u32,
                     )?,
-                    occluded,
+                    CaptureSource::Screen { occluded },
                     Some(geometry),
                 ));
             }
@@ -692,7 +697,7 @@ unsafe fn screenshot_window_bytes_with_occlusion_unsafe(
     // occluded warning needed on this path.
     Ok((
         cua_driver_core::image_utils::encode_bgra_to_png(&pixels, w as u32, h as u32)?,
-        false,
+        CaptureSource::Window,
         (!mostly_black).then_some(cropped_geometry),
     ))
 }
