@@ -565,9 +565,9 @@ impl Tool for GetWindowStateTool {
             // to call `bring_to_front` instead of retrying).
             // The previous `Err(_) => None` silently dropped the error and
             // upstream agents saw an empty response with no signal.
-            let (screenshot, screenshot_err) = if do_shot {
-                match crate::capture::screenshot_window_bytes(hwnd) {
-                    Ok(raw) => {
+            let (screenshot, screenshot_err, composited) = if do_shot {
+                match crate::capture::screenshot_window_bytes_with_source(hwnd) {
+                    Ok((raw, source)) => {
                         let (native_w, native_h) = crate::capture::png_dimensions_pub(&raw)?;
                         let png = crate::capture::resize_png_if_needed(&raw, max_dim)?;
                         let (w, h) = crate::capture::png_dimensions_pub(&png)?;
@@ -579,21 +579,23 @@ impl Tool for GetWindowStateTool {
                             (
                                 Some((None, Some(path.clone()), w, h, native_w, native_h, png)),
                                 None,
+                                source.composited(),
                             )
                         } else {
                             use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
                             (
                                 Some((Some(B64.encode(&png)), None, w, h, native_w, native_h, png)),
                                 None,
+                                source.composited(),
                             )
                         }
                     }
-                    Err(e) => (None, Some(format!("{e}"))),
+                    Err(e) => (None, Some(format!("{e}")), false),
                 }
             } else {
-                (None, None)
+                (None, None, false)
             };
-            Ok((screenshot, screenshot_err))
+            Ok((screenshot, screenshot_err, composited))
         });
         let result: anyhow::Result<_> =
             match tokio::time::timeout(UIA_SCREENSHOT_TIMEOUT, blocking).await {
@@ -606,13 +608,15 @@ impl Tool for GetWindowStateTool {
                         "window capture did not finish within {}s",
                         UIA_SCREENSHOT_TIMEOUT.as_secs()
                     )),
+                    false,
                 )),
             };
-        let result =
-            result.map(|(screenshot, screenshot_err)| (tree_result, screenshot, screenshot_err));
+        let result = result.map(|(screenshot, screenshot_err, composited)| {
+            (tree_result, screenshot, screenshot_err, composited)
+        });
 
         match result {
-            Ok((tree_opt, screenshot_opt, screenshot_err)) => {
+            Ok((tree_opt, screenshot_opt, screenshot_err, composited)) => {
                 let mut content = Vec::new();
                 let mut structured = json!({ "window_id": hwnd, "pid": pid });
                 let screenshot_scale = screenshot_opt
@@ -884,6 +888,9 @@ impl Tool for GetWindowStateTool {
                 }
                 if let Some(name) = app_name.as_deref().filter(|n| !n.is_empty()) {
                     structured["app_name"] = json!(name);
+                }
+                if composited {
+                    structured["screenshot_composited"] = json!(true);
                 }
 
                 cua_driver_core::window_inspection::mark_browser_chrome_capture_coverage(
