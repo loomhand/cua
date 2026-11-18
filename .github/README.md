@@ -15,7 +15,7 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | Patch | Upstream |
 |---|---|
 | rebase Chromium screen extents only from a frame the size of the target window | [#5414](https://github.com/trycua/cua/pull/5414), salvaged as [#8167](https://github.com/trycua/cua/pull/8167) |
-| Windows: wait 40 ms after a foreground desktop click, as after a background one | [#5410](https://github.com/trycua/cua/pull/5410), salvaged as [#8160](https://github.com/trycua/cua/pull/8160) |
+| Windows: wait 40 ms after a foreground desktop click, as after a background one | [#5410](https://github.com/trycua/cua/pull/5410), salvaged as [#8160](https://github.com/trycua/cua/pull/8160), merged upstream after 0.53.2: drop at the next sync |
 | macOS: bring_to_front returns at once when the exact window is already the focused frontmost window | [#5411](https://github.com/trycua/cua/pull/5411), salvaged as [#8163](https://github.com/trycua/cua/pull/8163) |
 | macOS: bring_to_front skips activation only when AppKit agrees the target is frontmost | [#5411](https://github.com/trycua/cua/pull/5411), salvaged as [#8163](https://github.com/trycua/cua/pull/8163) |
 | Windows: a desktop click that closes its own target window succeeds | [#5412](https://github.com/trycua/cua/pull/5412), salvaged as [#8166](https://github.com/trycua/cua/pull/8166) |
