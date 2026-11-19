@@ -183,7 +183,7 @@ impl Tool for HotkeyTool {
             Err(error) => return error,
         };
         let (elem_idx, hwnd_opt, admitted) = resolved.into_parts(args.opt_u64("window_id"));
-        if let Some(refusal) = super::impl_::refuse_if_disabled(pid, &admitted, "hotkey").await {
+        if let Some(refusal) = super::impl_::refuse_if_unanswered(pid, &admitted, "hotkey").await {
             return refusal;
         }
         let delivery = DeliveryMode::from_args(&args);
