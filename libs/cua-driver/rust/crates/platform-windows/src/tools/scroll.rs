@@ -132,6 +132,9 @@ impl Tool for ScrollTool {
             Err(e) => return e,
         };
         let (elem_idx, hwnd_opt, admitted) = resolved.into_parts(args.opt_u64("window_id"));
+        if let Some(refusal) = super::impl_::refuse_if_disabled(pid, &admitted, "scroll").await {
+            return refusal;
+        }
 
         // Resolve HWND: use window_id if given, else first window for pid.
         let hwnd = match hwnd_opt {
