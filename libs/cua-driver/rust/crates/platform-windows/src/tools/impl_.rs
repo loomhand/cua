@@ -230,7 +230,6 @@ pub(crate) async fn refuse_if_disabled(
     is_enabled_refusal(read_is_enabled(pid, admitted).await?, true, pid, tool)
 }
 
-/// [`refuse_if_disabled`] that refuses only an unanswered read, for key, hotkey and scroll.
 pub(crate) async fn refuse_if_unanswered(
     pid: u32,
     admitted: &Option<crate::uia::snapshot::RetainedElement>,
