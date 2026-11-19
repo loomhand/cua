@@ -769,11 +769,13 @@ fn send_click_synthesized_mods_impl(
         // Retained-mode frameworks establish capture/focus on mouse-down and can
         // lose the click if the real cursor is warped away while those queued
         // messages are still being dispatched. A desktop click restores nothing.
-        sleep(Duration::from_millis(if mode == ClickMode::Window {
-            120
-        } else {
-            40
-        }));
+        sleep(Duration::from_millis(
+            if mode == ClickMode::Window && !positioned {
+                120
+            } else {
+                40
+            },
+        ));
         if !was_topmost && !activate {
             let _ = SetWindowPos(
                 target,
