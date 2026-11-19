@@ -514,7 +514,15 @@ unsafe fn screenshot_via_screen_region(hwnd: HWND) -> Result<(Vec<u8>, i32, i32,
 
 /// Capture a window by HWND, returning raw PNG bytes.
 pub fn screenshot_window_bytes(hwnd: u64) -> Result<Vec<u8>> {
-    screenshot_window_bytes_with_source(hwnd).map(|(bytes, _)| bytes)
+    let (bytes, occluded) = screenshot_window_bytes_with_occlusion(hwnd)?;
+    if occluded {
+        bail!(
+            "cannot capture occluded window 0x{hwnd:x}: screen-region fallback \
+               contains covering-window pixels. Call bring_to_front with this \
+               window_id and take a fresh snapshot, or use get_desktop_state."
+        );
+    }
+    Ok(bytes)
 }
 
 /// Capture a window by HWND. Returns `(png_bytes, occluded_flag)` — the
@@ -525,19 +533,11 @@ pub fn screenshot_window_bytes(hwnd: u64) -> Result<Vec<u8>> {
 /// user / LLM should attach an explicit warning. See `target_is_obscured`
 /// for the sampling heuristic.
 pub fn screenshot_window_bytes_with_occlusion(hwnd: u64) -> Result<(Vec<u8>, bool)> {
-    screenshot_window_mapped(hwnd).map(|(png, source, _)| (png, source.occluded()))
+    screenshot_window_bytes_with_source(hwnd).map(|(png, source)| (png, source.occluded()))
 }
 
 pub(crate) fn screenshot_window_bytes_with_source(hwnd: u64) -> Result<(Vec<u8>, CaptureSource)> {
-    let (bytes, source, _) = screenshot_window_mapped(hwnd)?;
-    if source.occluded() {
-        bail!(
-            "cannot capture occluded window 0x{hwnd:x}: screen-region fallback \
-               contains covering-window pixels. Call bring_to_front with this \
-               window_id and take a fresh snapshot, or use get_desktop_state."
-        );
-    }
-    Ok((bytes, source))
+    screenshot_window_mapped(hwnd).map(|(png, source, _)| (png, source))
 }
 
 /// Capture the final input point against the exact source frame. WGC frame
