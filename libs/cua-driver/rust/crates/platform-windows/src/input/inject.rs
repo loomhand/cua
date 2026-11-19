@@ -146,7 +146,7 @@ pub(crate) unsafe fn force_foreground_attached(target: HWND) -> bool {
     GetForegroundWindow() == target
 }
 
-fn answers(window: HWND) -> bool {
+pub(crate) fn answers(window: HWND) -> bool {
     let sent = unsafe {
         SendMessageTimeoutW(
             window,

@@ -786,7 +786,7 @@ fn send_click_synthesized_mods_impl(
             );
         }
         if !activate {
-            if !prev_fg.0.is_null() && prev_fg != target {
+            if !prev_fg.0.is_null() && prev_fg != target && crate::input::inject::answers(prev_fg) {
                 let _ = SetWindowPos(
                     prev_fg,
                     HWND_TOP,
@@ -1058,7 +1058,10 @@ fn send_drag_synthesized_impl(
                         SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
                     );
                 }
-                if !prev_fg.0.is_null() && prev_fg != target {
+                if !prev_fg.0.is_null()
+                    && prev_fg != target
+                    && crate::input::inject::answers(prev_fg)
+                {
                     let _ = SetWindowPos(
                         prev_fg,
                         HWND_TOP,
