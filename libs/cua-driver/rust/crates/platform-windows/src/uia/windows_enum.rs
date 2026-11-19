@@ -951,12 +951,15 @@ impl WorkerPattern {
 }
 
 /// `element`'s live `IsEnabled` within [`HIT_CHECK_TIMEOUT`], under `pid`'s
-/// gate; `None` also when the gate is busy or the read is late.
+/// gate: `Ok(None)` when it cannot be read, `Err` when the gate is busy or
+/// the read is late.
 pub(crate) fn element_is_enabled_bounded(
     pid: u32,
     element: &crate::uia::snapshot::RetainedElement,
-) -> Option<bool> {
-    let owned = WorkerElement::of(element)?;
+) -> Result<Option<bool>, ()> {
+    let Some(owned) = WorkerElement::of(element) else {
+        return Ok(None);
+    };
     run_uia_single_flight(
         &process_single_flight(pid),
         "is-enabled read",
@@ -971,8 +974,7 @@ pub(crate) fn element_is_enabled_bounded(
                 .map(|value| value.as_bool())
         },
     )
-    .ok()
-    .flatten()
+    .map_err(|_| ())
 }
 
 /// `element`'s live `IsOffscreen` within [`HIT_CHECK_TIMEOUT`], under the gate
@@ -1159,6 +1161,22 @@ fn point_shape_chain_unbounded(sx: i32, sy: i32) -> Option<PointShapeChain> {
         let rects = elements.iter().map(rect_of).collect();
         Some((chain, rects, in_document))
     }
+}
+
+#[cfg(test)]
+pub(crate) fn hold_process_gate(pid: u32) -> mpsc::Sender<()> {
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let held = run_uia_single_flight(
+        &process_single_flight(pid),
+        "test hold",
+        Duration::from_millis(20),
+        "test",
+        move |_| {
+            let _ = release_rx.recv();
+        },
+    );
+    assert!(matches!(held, Err(UiaDeadlineError::Timeout)));
+    release_tx
 }
 
 #[cfg(test)]
