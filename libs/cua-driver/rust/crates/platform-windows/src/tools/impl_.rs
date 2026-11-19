@@ -163,14 +163,21 @@ pub(crate) fn resolve_onscreen_point_with_scroll(
         // inside the restored window rect.
         let trust_cached = cached_center_in_window && !retained.read_while_minimized;
         if retained.is_uia() {
-            let is_offscreen =
-                unsafe { crate::uia::scroll::element_is_offscreen(retained.as_ptr()) };
+            let Ok(is_offscreen) =
+                crate::uia::windows_enum::element_is_offscreen_bounded(hwnd, retained)
+            else {
+                return Err(element_not_visible_refusal(format!(
+                    "Element [{idx}] did not answer whether it is on screen (its app took over \
+                     2 s, or has not returned an earlier UI Automation call), so {action_verb} \
+                     was refused before any input. Retry once the app responds."
+                )));
+            };
             if trust_cached && is_offscreen != Some(true) {
                 return Ok((cx, cy));
             }
-            if let Some((nx, ny)) = unsafe {
-                crate::uia::scroll::scroll_into_view_and_recenter(hwnd, retained.as_ptr())
-            } {
+            if let Ok(Some((nx, ny))) =
+                crate::uia::windows_enum::scroll_into_view_bounded(hwnd, retained)
+            {
                 if crate::input::point_in_window_bounds(hwnd, nx, ny) {
                     return Ok((nx, ny));
                 }
@@ -199,6 +206,18 @@ pub(crate) fn resolve_onscreen_point_with_scroll(
     })))
 }
 
+pub(crate) fn element_not_visible_refusal(message: String) -> ToolResult {
+    ToolResult::error(message.clone()).with_structured(json!({
+        "status": "refused",
+        "code": "element_not_visible",
+        "effect": "refused",
+        "refusal": {
+            "code": "element_not_visible",
+            "message": message,
+        }
+    }))
+}
+
 /// Re-read `IsEnabled` on an admitted token target and refuse a disabled one
 /// before any cursor or input work, as macOS does (`element_disabled`). The
 /// snapshot's `enabled` can be stale. An element whose state cannot be read
@@ -209,9 +228,11 @@ pub(crate) async fn refuse_if_disabled(
     tool: &str,
 ) -> Option<ToolResult> {
     let element = admitted.clone()?;
-    let enabled = tokio::task::spawn_blocking(move || element.element_is_enabled())
-        .await
-        .ok()?;
+    let enabled = tokio::task::spawn_blocking(move || {
+        crate::uia::windows_enum::element_is_enabled_bounded(pid, &element)
+    })
+    .await
+    .ok()?;
     (enabled == Some(false)).then(|| element_disabled_refusal(pid, tool))
 }
 
