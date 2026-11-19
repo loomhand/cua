@@ -15,7 +15,6 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | Patch | Upstream |
 |---|---|
 | rebase Chromium screen extents only from a frame the size of the target window | [#5414](https://github.com/trycua/cua/pull/5414), salvaged as [#8167](https://github.com/trycua/cua/pull/8167) |
-| Windows: wait 40 ms after a foreground desktop click, as after a background one | [#5410](https://github.com/trycua/cua/pull/5410), salvaged as [#8160](https://github.com/trycua/cua/pull/8160), merged upstream after 0.53.2: drop at the next sync |
 | macOS: bring_to_front returns at once when the exact window is already the focused frontmost window | [#5411](https://github.com/trycua/cua/pull/5411), salvaged as [#8163](https://github.com/trycua/cua/pull/8163) |
 | macOS: bring_to_front skips activation only when AppKit agrees the target is frontmost | [#5411](https://github.com/trycua/cua/pull/5411), salvaged as [#8163](https://github.com/trycua/cua/pull/8163) |
 | Windows: a desktop click that closes its own target window succeeds | [#5412](https://github.com/trycua/cua/pull/5412), salvaged as [#8166](https://github.com/trycua/cua/pull/8166) |
@@ -63,6 +62,7 @@ Before a box image moves its cua-driver pin to `dev`:
 
 Upstream already:
 
+- wait 40 ms after a foreground Windows desktop click, as after a background one, and accept a click that hides its owned dialog ([#8160](https://github.com/trycua/cua/pull/8160), salvaged from [#5410](https://github.com/trycua/cua/pull/5410), in cua-driver-rs 0.54.0);
 - wait for the spawned process's environment in the NO_AT_BRIDGE test ([#7080](https://github.com/trycua/cua/pull/7080), which superseded [#7067](https://github.com/trycua/cua/pull/7067));
 - confirm the Linux virtual keyboard's key events run by run and unplug it when keys stay unread ([#7145](https://github.com/trycua/cua/pull/7145), salvaged from [#7076](https://github.com/trycua/cua/pull/7076)), and keep borrowed keycodes bound until 150 ms after a text's last key on them ([#7146](https://github.com/trycua/cua/pull/7146), salvaged from [#7079](https://github.com/trycua/cua/pull/7079));
 - read the macOS keyboard layout on the main queue in a process that runs AppKit, so `press_key` no longer traps in Text Input Sources ([#6939](https://github.com/trycua/cua/pull/6939), which replaced the fork's own fix for the same trap);
