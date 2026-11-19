@@ -1566,6 +1566,10 @@ pub(crate) fn live_uia_root_snapshot() -> crate::uia::snapshot::UiaSnapshot {
         CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
     };
     use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
+    static ROOT_READ: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = ROOT_READ
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let root = unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         let uia: IUIAutomation =
