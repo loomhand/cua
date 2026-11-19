@@ -52,6 +52,7 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | macOS: a terminal confirms typed text only by a copy its scrollback did not already hold, and never when its value could not be read before the keys | [#7278](https://github.com/trycua/cua/pull/7278), salvaged as [#8130](https://github.com/trycua/cua/pull/8130) |
 | Windows: `get_window_state` sets `screenshot_composited: true`, as the Linux driver does, when the window image is a copy of its screen region, taken after the window's own capture failed, which shows any window over it | not yet offered upstream |
 | all platforms: the `element_token` snapshot counter starts at a random value in each driver process, so a token kept across a driver restart is refused as stale instead of naming a row of a newer snapshot with the same id | not yet offered upstream |
+| Windows: a foreground action attaches to the foreground window's thread only when that window answers a `WM_NULL` within 250 ms, so a hung foreground app no longer stalls a click, key or `bring_to_front` until it pumps again | not yet offered upstream |
 
 Before a box image moves its cua-driver pin to `dev`:
 
