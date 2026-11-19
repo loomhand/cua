@@ -69,7 +69,7 @@ jobs:
           path: libs/cua-driver/rust/dist/*.tar.gz
 
   macos:
-    runs-on: macos-15
+    runs-on: macos-15-intel
     env:
       CUA_TELEMETRY: "0"
       MACOSX_DEPLOYMENT_TARGET: "13.0"
