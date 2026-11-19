@@ -221,7 +221,7 @@ pub(crate) fn element_not_visible_refusal(message: String) -> ToolResult {
 /// Re-read `IsEnabled` on an admitted token target and refuse a disabled one
 /// before any cursor or input work, as macOS does (`element_disabled`). The
 /// snapshot's `enabled` can be stale. An element whose state cannot be read
-/// is left to the tool.
+/// is left to the tool; one whose app does not answer in time is refused.
 pub(crate) async fn refuse_if_disabled(
     pid: u32,
     admitted: &Option<crate::uia::snapshot::RetainedElement>,
@@ -233,7 +233,15 @@ pub(crate) async fn refuse_if_disabled(
     })
     .await
     .ok()?;
-    (enabled == Some(false)).then(|| element_disabled_refusal(pid, tool))
+    match enabled {
+        Err(()) => Some(element_not_visible_refusal(format!(
+            "Element did not answer whether it is enabled (its app took over 2 s, or has not \
+             returned an earlier UI Automation call), so the {tool} was refused before any \
+             input. Retry once the app responds."
+        ))),
+        Ok(Some(false)) => Some(element_disabled_refusal(pid, tool)),
+        Ok(_) => None,
+    }
 }
 
 pub(crate) fn element_disabled_refusal(pid: u32, tool: &str) -> ToolResult {
@@ -1522,6 +1530,60 @@ pub fn build_registry_with_provider(
     r.register_recording_tools();
     r.register_session_tools();
     r
+}
+
+#[cfg(test)]
+mod is_enabled_refusal_tests {
+    use crate::uia::snapshot::{SnapshotKind, UiaSnapshot};
+    use crate::uia::UiaNode;
+    use cua_driver_core::snapshot_store::SnapshotPayload;
+    use windows::core::Interface;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+    };
+    use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
+
+    #[tokio::test]
+    async fn a_busy_is_enabled_read_refuses_before_any_input() {
+        let pid = u32::MAX - 4;
+        let root = unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let uia: IUIAutomation =
+                CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).unwrap();
+            uia.GetRootElement().unwrap()
+        };
+        let node = UiaNode {
+            element_index: Some(0),
+            control_type: "Pane".to_owned(),
+            name: None,
+            value: None,
+            automation_id: None,
+            help_text: None,
+            actions: Vec::new(),
+            enabled: Some(true),
+            selected: None,
+            is_password: None,
+            element_ptr: root.into_raw() as usize,
+            center_x: 0,
+            center_y: 0,
+            rect: None,
+            msaa_role: None,
+            depth: 0,
+            parent_element_index: None,
+            in_web_content: false,
+        };
+        let element = UiaSnapshot::from_nodes(&[node], SnapshotKind::Uia).retain(0);
+        assert!(element.is_some());
+
+        let release = crate::uia::windows_enum::hold_process_gate(pid);
+        let refusal = super::refuse_if_disabled(pid, &element, "click").await;
+        release.send(()).unwrap();
+        let refusal = refusal.expect("a busy IsEnabled read refuses the action");
+        assert_eq!(
+            refusal.structured_content.expect("structured refusal")["code"],
+            "element_not_visible"
+        );
+    }
 }
 
 #[cfg(test)]
