@@ -227,19 +227,43 @@ pub(crate) async fn refuse_if_disabled(
     admitted: &Option<crate::uia::snapshot::RetainedElement>,
     tool: &str,
 ) -> Option<ToolResult> {
+    is_enabled_refusal(read_is_enabled(pid, admitted).await?, true, pid, tool)
+}
+
+/// [`refuse_if_disabled`] that refuses only an unanswered read, for key, hotkey and scroll.
+pub(crate) async fn refuse_if_unanswered(
+    pid: u32,
+    admitted: &Option<crate::uia::snapshot::RetainedElement>,
+    tool: &str,
+) -> Option<ToolResult> {
+    is_enabled_refusal(read_is_enabled(pid, admitted).await?, false, pid, tool)
+}
+
+async fn read_is_enabled(
+    pid: u32,
+    admitted: &Option<crate::uia::snapshot::RetainedElement>,
+) -> Option<Result<Option<bool>, ()>> {
     let element = admitted.clone()?;
-    let enabled = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         crate::uia::windows_enum::element_is_enabled_bounded(pid, &element)
     })
     .await
-    .ok()?;
-    match enabled {
+    .ok()
+}
+
+fn is_enabled_refusal(
+    read: Result<Option<bool>, ()>,
+    refuse_disabled: bool,
+    pid: u32,
+    tool: &str,
+) -> Option<ToolResult> {
+    match read {
         Err(()) => Some(element_not_visible_refusal(format!(
             "Element did not answer whether it is enabled (its app took over 2 s, or has not \
              returned an earlier UI Automation call), so the {tool} was refused before any \
              input. Retry once the app responds."
         ))),
-        Ok(Some(false)) => Some(element_disabled_refusal(pid, tool)),
+        Ok(Some(false)) if refuse_disabled => Some(element_disabled_refusal(pid, tool)),
         Ok(_) => None,
     }
 }
@@ -1536,55 +1560,100 @@ pub fn build_registry_with_provider(
 }
 
 #[cfg(test)]
-mod is_enabled_refusal_tests {
-    use crate::uia::snapshot::{SnapshotKind, UiaSnapshot};
-    use crate::uia::UiaNode;
-    use cua_driver_core::snapshot_store::SnapshotPayload;
+pub(crate) fn live_uia_root_snapshot() -> crate::uia::snapshot::UiaSnapshot {
     use windows::core::Interface;
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
     };
     use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
+    let root = unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let uia: IUIAutomation =
+            CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).unwrap();
+        uia.GetRootElement().unwrap()
+    };
+    let node = crate::uia::UiaNode {
+        element_index: Some(0),
+        control_type: "Pane".to_owned(),
+        name: None,
+        value: None,
+        automation_id: None,
+        help_text: None,
+        actions: Vec::new(),
+        enabled: Some(true),
+        selected: None,
+        is_password: None,
+        element_ptr: root.into_raw() as usize,
+        center_x: 0,
+        center_y: 0,
+        rect: None,
+        msaa_role: None,
+        depth: 0,
+        parent_element_index: None,
+        in_web_content: false,
+    };
+    crate::uia::snapshot::UiaSnapshot::from_nodes(&[node], crate::uia::snapshot::SnapshotKind::Uia)
+}
+
+#[cfg(test)]
+mod is_enabled_refusal_tests {
+    use super::is_enabled_refusal;
+    use cua_driver_core::snapshot_store::SnapshotPayload;
+
+    fn code(refusal: Option<cua_driver_core::protocol::ToolResult>) -> Option<String> {
+        refusal.map(|result| {
+            result.structured_content.expect("structured refusal")["code"]
+                .as_str()
+                .expect("refusal code")
+                .to_owned()
+        })
+    }
+
+    #[test]
+    fn the_element_tools_refuse_an_unanswered_read_and_only_five_refuse_a_disabled_one() {
+        for refuse_disabled in [true, false] {
+            assert_eq!(
+                code(is_enabled_refusal(Err(()), refuse_disabled, 1, "click")).as_deref(),
+                Some("element_not_visible")
+            );
+            assert_eq!(
+                code(is_enabled_refusal(Ok(None), refuse_disabled, 1, "click")),
+                None
+            );
+            assert_eq!(
+                code(is_enabled_refusal(
+                    Ok(Some(true)),
+                    refuse_disabled,
+                    1,
+                    "click"
+                )),
+                None
+            );
+        }
+        assert_eq!(
+            code(is_enabled_refusal(Ok(Some(false)), true, 1, "click")).as_deref(),
+            Some("element_disabled")
+        );
+        assert_eq!(
+            code(is_enabled_refusal(Ok(Some(false)), false, 1, "scroll")),
+            None
+        );
+    }
 
     #[tokio::test]
+    #[ignore = "needs a live UIA root (interactive desktop); drives the per-process gate"]
     async fn a_busy_is_enabled_read_refuses_before_any_input() {
         let pid = u32::MAX - 4;
-        let root = unsafe {
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            let uia: IUIAutomation =
-                CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).unwrap();
-            uia.GetRootElement().unwrap()
-        };
-        let node = UiaNode {
-            element_index: Some(0),
-            control_type: "Pane".to_owned(),
-            name: None,
-            value: None,
-            automation_id: None,
-            help_text: None,
-            actions: Vec::new(),
-            enabled: Some(true),
-            selected: None,
-            is_password: None,
-            element_ptr: root.into_raw() as usize,
-            center_x: 0,
-            center_y: 0,
-            rect: None,
-            msaa_role: None,
-            depth: 0,
-            parent_element_index: None,
-            in_web_content: false,
-        };
-        let element = UiaSnapshot::from_nodes(&[node], SnapshotKind::Uia).retain(0);
+        let element = super::live_uia_root_snapshot().retain(0);
         assert!(element.is_some());
 
         let release = crate::uia::windows_enum::hold_process_gate(pid);
         let refusal = super::refuse_if_disabled(pid, &element, "click").await;
         release.send(()).unwrap();
-        let refusal = refusal.expect("a busy IsEnabled read refuses the action");
         assert_eq!(
-            refusal.structured_content.expect("structured refusal")["code"],
-            "element_not_visible"
+            code(refusal).as_deref(),
+            Some("element_not_visible"),
+            "a busy IsEnabled read refuses the action"
         );
     }
 }
