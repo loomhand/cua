@@ -175,19 +175,14 @@ pub(crate) fn resolve_onscreen_point_with_scroll(
             if trust_cached && is_offscreen != Some(true) {
                 return Ok((cx, cy));
             }
-            match crate::uia::windows_enum::scroll_into_view_bounded(hwnd, retained) {
-                Err(()) => {
-                    return Err(app_unresponsive_refusal(format!(
-                        "Element [{idx}] did not answer whether it scrolled into view within 4 s \
-                         (its app took longer, or has not returned an earlier UI Automation \
-                         call), so {action_verb} was refused before any input. Retry once the \
-                         app responds."
-                    )));
-                }
-                Ok(Some((nx, ny))) if crate::input::point_in_window_bounds(hwnd, nx, ny) => {
+            let scrolled = crate::uia::windows_enum::scroll_into_view_bounded(hwnd, retained);
+            if let Some(refusal) = unanswered_scroll_refusal(&scrolled, idx, action_verb) {
+                return Err(refusal);
+            }
+            if let Ok(Some((nx, ny))) = scrolled {
+                if crate::input::point_in_window_bounds(hwnd, nx, ny) {
                     return Ok((nx, ny));
                 }
-                Ok(_) => {}
             }
         } else if trust_cached {
             return Ok((cx, cy));
@@ -211,6 +206,20 @@ pub(crate) fn resolve_onscreen_point_with_scroll(
             "message": message,
         }
     })))
+}
+
+fn unanswered_scroll_refusal(
+    scrolled: &Result<Option<(i32, i32)>, ()>,
+    idx: usize,
+    action_verb: &str,
+) -> Option<ToolResult> {
+    scrolled.is_err().then(|| {
+        app_unresponsive_refusal(format!(
+            "Element [{idx}] did not answer whether it scrolled into view within 4 s (its app \
+             took longer, or has not returned an earlier UI Automation call), so {action_verb} \
+             was refused before any input. Retry once the app responds."
+        ))
+    })
 }
 
 pub(crate) fn app_unresponsive_refusal(message: String) -> ToolResult {
@@ -1643,6 +1652,26 @@ mod is_enabled_refusal_tests {
         );
         assert_eq!(
             code(is_enabled_refusal(Ok(Some(false)), false, 1, "scroll")),
+            None
+        );
+    }
+
+    #[test]
+    fn only_an_unanswered_scroll_into_view_refuses_with_app_unresponsive() {
+        assert_eq!(
+            code(super::unanswered_scroll_refusal(&Err(()), 3, "clicking")).as_deref(),
+            Some("app_unresponsive")
+        );
+        assert_eq!(
+            code(super::unanswered_scroll_refusal(&Ok(None), 3, "clicking")),
+            None
+        );
+        assert_eq!(
+            code(super::unanswered_scroll_refusal(
+                &Ok(Some((1, 2))),
+                3,
+                "clicking"
+            )),
             None
         );
     }
