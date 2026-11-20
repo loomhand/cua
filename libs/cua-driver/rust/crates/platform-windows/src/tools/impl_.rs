@@ -175,12 +175,19 @@ pub(crate) fn resolve_onscreen_point_with_scroll(
             if trust_cached && is_offscreen != Some(true) {
                 return Ok((cx, cy));
             }
-            if let Ok(Some((nx, ny))) =
-                crate::uia::windows_enum::scroll_into_view_bounded(hwnd, retained)
-            {
-                if crate::input::point_in_window_bounds(hwnd, nx, ny) {
+            match crate::uia::windows_enum::scroll_into_view_bounded(hwnd, retained) {
+                Err(()) => {
+                    return Err(app_unresponsive_refusal(format!(
+                        "Element [{idx}] did not answer whether it scrolled into view within 4 s \
+                         (its app took longer, or has not returned an earlier UI Automation \
+                         call), so {action_verb} was refused before any input. Retry once the \
+                         app responds."
+                    )));
+                }
+                Ok(Some((nx, ny))) if crate::input::point_in_window_bounds(hwnd, nx, ny) => {
                     return Ok((nx, ny));
                 }
+                Ok(_) => {}
             }
         } else if trust_cached {
             return Ok((cx, cy));
