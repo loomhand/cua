@@ -378,8 +378,8 @@ fn an_earlier_failed_call_reads_the_window_and_never_retries_in_the_foreground()
     );
     assert_eq!(
         hint.hint,
-        "An earlier UI Automation call failed and may have taken effect, so nothing more was sent. \
-         Read the window again and check the target before you act again."
+        "An earlier UI Automation call failed and may have taken effect. Read the window again and \
+         check the target before you act again."
     );
     assert!(!hint.hint.contains("foreground"));
     assert_eq!(
