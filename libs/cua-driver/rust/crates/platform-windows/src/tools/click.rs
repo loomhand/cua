@@ -104,38 +104,45 @@ async fn verified_hit_click(
     }
 }
 
-fn tool_result_text(result: ToolResult) -> String {
+fn structured_code(result: &ToolResult) -> Option<String> {
     result
-        .content
-        .into_iter()
-        .find_map(|content| match content {
-            cua_driver_core::protocol::Content::Text { text, .. } => Some(text),
-            _ => None,
-        })
-        .unwrap_or_else(|| "element action was refused".to_owned())
+        .structured_content
+        .as_ref()
+        .and_then(|structured| structured["code"].as_str())
+        .map(str::to_owned)
 }
 
 fn unknown_effect_after_failed_calls(
     failed_calls: &[ActionTransport],
+    cause_code: Option<&str>,
     message: impl FnOnce(&str) -> String,
 ) -> ToolResult {
     let failed: Vec<String> = failed_calls
         .iter()
         .map(|call| format!("{call:?}"))
         .collect();
-    cua_driver_core::delivery::background_unavailable_result(
-        message(&failed.join(", ")),
-        "background_unavailable",
-        "an earlier UIA pattern call failed and may still take effect; inspect the target \
-         state before retrying with delivery_mode:\"foreground\".",
-        json!({
-            "failed_calls": failed,
-            "reason": "earlier_call_failed",
-            "path": "ax",
-            "verified": false,
-            "effect": "unverifiable",
-        }),
-    )
+    let mut structured = json!({
+        "code": "background_unavailable",
+        "reason": "earlier_call_failed",
+        "effect": "unverifiable",
+        "verified": false,
+        "path": "ax",
+        "failed_calls": failed,
+    });
+    if let Some(cause) = cause_code {
+        structured["cause_code"] = json!(cause);
+    }
+    ToolResult::error(message(&failed.join(", "))).with_structured(structured)
+}
+
+fn late_pattern_after_failed_calls(failed_calls: &[ActionTransport], idx: usize) -> ToolResult {
+    unknown_effect_after_failed_calls(failed_calls, Some("app_unresponsive"), |failed| {
+        format!(
+            "Element [{idx}] did not answer for its UI Automation pattern after an earlier \
+             pattern call failed ({failed}). No fallback input was sent. The click effect is \
+             unknown; inspect the target state before another action."
+        )
+    })
 }
 
 fn background_click_refusal(
@@ -146,14 +153,19 @@ fn background_click_refusal(
     if failed_calls.is_empty() {
         return Box::new(refusal);
     }
-    let reason = tool_result_text(refusal);
-    Box::new(unknown_effect_after_failed_calls(failed_calls, |failed| {
-        format!(
-            "Element [{idx}] was refused after an earlier pattern call failed ({failed}): \
-             {reason} No fallback input was sent. The click effect is unknown; inspect the \
-             target state before another action."
-        )
-    }))
+    let cause = structured_code(&refusal);
+    let shown = cause.clone().unwrap_or_else(|| "refusal".to_owned());
+    Box::new(unknown_effect_after_failed_calls(
+        failed_calls,
+        cause.as_deref(),
+        |failed| {
+            format!(
+                "Element [{idx}] was refused ({shown}) after an earlier pattern call failed \
+                 ({failed}). No fallback input was sent. The click effect is unknown; read the \
+                 window and check the target before another action."
+            )
+        },
+    ))
 }
 
 fn background_send_failure(
@@ -164,12 +176,13 @@ fn background_send_failure(
     if failed_calls.is_empty() {
         return reply;
     }
-    let reason = tool_result_text(reply);
-    unknown_effect_after_failed_calls(failed_calls, |failed| {
+    let cause = structured_code(&reply);
+    let shown = cause.clone().unwrap_or_else(|| "send error".to_owned());
+    unknown_effect_after_failed_calls(failed_calls, cause.as_deref(), |failed| {
         format!(
-            "Element [{idx}]'s click failed to send after an earlier pattern call failed \
-             ({failed}): {reason} The click effect is unknown; inspect the target state before \
-             another action."
+            "Element [{idx}]'s fallback click did not complete ({shown}) after an earlier \
+             pattern call failed ({failed}). The click effect is unknown; read the window and \
+             check the target before another action."
         )
     })
 }
@@ -1074,14 +1087,7 @@ impl Tool for ClickTool {
                                      Retry once the app responds."
                                 )));
                             }
-                            Box::new(unknown_effect_after_failed_calls(failed_calls, |failed| {
-                                format!(
-                                    "Element [{idx}] did not answer for its UI Automation pattern \
-                                     after an earlier pattern call failed ({failed}). No fallback \
-                                     input was sent. The click effect is unknown; inspect the \
-                                     target state before another action."
-                                )
-                            }))
+                            Box::new(late_pattern_after_failed_calls(failed_calls, idx))
                         };
 
                         // Try patterns in order of click-semantics specificity:
@@ -1668,12 +1674,47 @@ mod pixel_click_transport_tests {
 #[cfg(test)]
 mod background_click_refusal_tests {
     use super::{background_click_refusal, ActionTransport};
-    use cua_driver_core::protocol::ToolResult;
+    use cua_driver_core::protocol::{Content, ToolResult};
     use serde_json::json;
 
     fn refusal(code: &str) -> ToolResult {
-        ToolResult::error(format!("refused: {code}."))
-            .with_structured(json!({ "status": "refused", "code": code, "effect": "refused" }))
+        ToolResult::error(format!(
+            "refused: {code}. Retry this action with delivery_mode:\"foreground\"."
+        ))
+        .with_structured(json!({
+            "status": "refused",
+            "code": code,
+            "effect": "refused",
+            "escalation": {"recommended": "foreground", "reason": "r"},
+        }))
+    }
+
+    fn assert_unknown_effect(result: &ToolResult, cause: &str, failed: serde_json::Value) {
+        let text: String = result
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                Content::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(!text.contains("foreground"), "{text}");
+        let structured = result
+            .structured_content
+            .as_ref()
+            .expect("structured reply");
+        assert!(
+            !structured.to_string().contains("foreground"),
+            "{structured}"
+        );
+        assert!(structured.get("escalation").is_none(), "{structured}");
+        assert!(structured.get("suggestion").is_none(), "{structured}");
+        assert_eq!(structured["code"], "background_unavailable");
+        assert_eq!(structured["reason"], "earlier_call_failed");
+        assert_eq!(structured["effect"], "unverifiable");
+        assert_eq!(structured["path"], "ax");
+        assert_eq!(structured["cause_code"], cause);
+        assert_eq!(structured["failed_calls"], failed);
     }
 
     #[test]
@@ -1691,12 +1732,7 @@ mod background_click_refusal_tests {
             &[ActionTransport::WindowsUiaInvoke],
             4,
         );
-        let structured = carried.structured_content.expect("structured refusal");
-        assert_eq!(structured["code"], "background_unavailable");
-        assert_eq!(structured["effect"], "unverifiable");
-        assert_eq!(structured["path"], "ax");
-        assert_eq!(structured["failed_calls"], json!(["WindowsUiaInvoke"]));
-        assert_eq!(structured["reason"], "earlier_call_failed");
+        assert_unknown_effect(&carried, "element_not_visible", json!(["WindowsUiaInvoke"]));
     }
 
     #[test]
@@ -1715,14 +1751,17 @@ mod background_click_refusal_tests {
             ],
             4,
         );
-        let structured = wrapped.structured_content.expect("structured reply");
-        assert_eq!(structured["code"], "background_unavailable");
-        assert_eq!(structured["effect"], "unverifiable");
-        assert_eq!(structured["reason"], "earlier_call_failed");
-        assert_eq!(
-            structured["failed_calls"],
-            json!(["WindowsUiaInvoke", "WindowsUiaToggle"])
+        assert_unknown_effect(
+            &wrapped,
+            "background_occluded",
+            json!(["WindowsUiaInvoke", "WindowsUiaToggle"]),
         );
+    }
+
+    #[test]
+    fn a_late_pattern_read_after_a_failed_pattern_call_has_an_unknown_effect() {
+        let reply = super::late_pattern_after_failed_calls(&[ActionTransport::WindowsUiaInvoke], 4);
+        assert_unknown_effect(&reply, "app_unresponsive", json!(["WindowsUiaInvoke"]));
     }
 }
 
