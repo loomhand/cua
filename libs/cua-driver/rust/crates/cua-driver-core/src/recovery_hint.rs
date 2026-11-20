@@ -902,8 +902,8 @@ fn background_unavailable(c: &Ctx) -> RecoveryHint {
         ))
         .call(c.read_window()),
         (_, Some("earlier_call_failed")) => RecoveryHint::new(
-            "An earlier UI Automation call failed and may have taken effect, so nothing more was sent. \
-             Read the window again and check the target before you act again.",
+            "An earlier UI Automation call failed and may have taken effect. Read the window again \
+             and check the target before you act again.",
         )
         .call(c.read_window()),
         (_, Some("electron_main_process_unavailable")) => RecoveryHint::new(format!(
