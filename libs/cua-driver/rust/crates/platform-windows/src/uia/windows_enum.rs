@@ -964,7 +964,7 @@ pub(crate) fn element_is_enabled_bounded(
         &process_single_flight(pid),
         "is-enabled read",
         HIT_CHECK_TIMEOUT,
-        "an unread IsEnabled",
+        "a refusal before any input",
         move |_| {
             // Keep this first so COM interfaces drop before CoUninitialize.
             let _com = ComInit::new();
@@ -991,7 +991,7 @@ pub(crate) fn element_is_offscreen_bounded(
         &process_single_flight(crate::win32::window_owner_pid(hwnd).unwrap_or(0)),
         "off-screen read",
         HIT_CHECK_TIMEOUT,
-        "an off-screen refusal",
+        "a refusal before any input",
         move |_| {
             // Keep this first so COM interfaces drop before CoUninitialize.
             let _com = ComInit::new();
@@ -1019,7 +1019,7 @@ pub(crate) fn element_pattern_bounded(
         &process_single_flight(crate::win32::window_owner_pid(hwnd).unwrap_or(0)),
         "pattern read",
         HIT_CHECK_TIMEOUT,
-        "a pattern refusal",
+        "a refusal before any input, or an unknown-effect reply after a failed pattern call",
         move |_| {
             // Keep this first so COM interfaces drop before CoUninitialize.
             let _com = ComInit::new();
@@ -1047,7 +1047,7 @@ pub(crate) fn scroll_into_view_bounded(
         &process_single_flight(crate::win32::window_owner_pid(host_hwnd).unwrap_or(0)),
         "scroll into view",
         SCROLL_INTO_VIEW_TIMEOUT,
-        "the off-screen refusal",
+        "a refusal before any input",
         move |_| {
             // Keep this first so COM interfaces drop before CoUninitialize.
             let _com = ComInit::new();

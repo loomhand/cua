@@ -166,7 +166,7 @@ pub(crate) fn resolve_onscreen_point_with_scroll(
             let Ok(is_offscreen) =
                 crate::uia::windows_enum::element_is_offscreen_bounded(hwnd, retained)
             else {
-                return Err(element_not_visible_refusal(format!(
+                return Err(app_unresponsive_refusal(format!(
                     "Element [{idx}] did not answer whether it is on screen (its app took over \
                      2 s, or has not returned an earlier UI Automation call), so {action_verb} \
                      was refused before any input. Retry once the app responds."
@@ -206,13 +206,13 @@ pub(crate) fn resolve_onscreen_point_with_scroll(
     })))
 }
 
-pub(crate) fn element_not_visible_refusal(message: String) -> ToolResult {
+pub(crate) fn app_unresponsive_refusal(message: String) -> ToolResult {
     ToolResult::error(message.clone()).with_structured(json!({
         "status": "refused",
-        "code": "element_not_visible",
+        "code": "app_unresponsive",
         "effect": "refused",
         "refusal": {
-            "code": "element_not_visible",
+            "code": "app_unresponsive",
             "message": message,
         }
     }))
@@ -257,7 +257,7 @@ fn is_enabled_refusal(
     tool: &str,
 ) -> Option<ToolResult> {
     match read {
-        Err(()) => Some(element_not_visible_refusal(format!(
+        Err(()) => Some(app_unresponsive_refusal(format!(
             "Element did not answer whether it is enabled (its app took over 2 s, or has not \
              returned an earlier UI Automation call), so the {tool} was refused before any \
              input. Retry once the app responds."
@@ -1614,7 +1614,7 @@ mod is_enabled_refusal_tests {
         for refuse_disabled in [true, false] {
             assert_eq!(
                 code(is_enabled_refusal(Err(()), refuse_disabled, 1, "click")).as_deref(),
-                Some("element_not_visible")
+                Some("app_unresponsive")
             );
             assert_eq!(
                 code(is_enabled_refusal(Ok(None), refuse_disabled, 1, "click")),
@@ -1652,7 +1652,7 @@ mod is_enabled_refusal_tests {
         release.send(()).unwrap();
         assert_eq!(
             code(refusal).as_deref(),
-            Some("element_not_visible"),
+            Some("app_unresponsive"),
             "a busy IsEnabled read refuses the action"
         );
     }
