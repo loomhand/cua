@@ -130,6 +130,7 @@ fn unknown_effect_after_failed_calls(
          state before retrying with delivery_mode:\"foreground\".",
         json!({
             "failed_calls": failed,
+            "reason": "earlier_call_failed",
             "path": "ax",
             "verified": false,
             "effect": "unverifiable",
@@ -153,6 +154,24 @@ fn background_click_refusal(
              target state before another action."
         )
     }))
+}
+
+fn background_send_failure(
+    reply: ToolResult,
+    failed_calls: &[ActionTransport],
+    idx: usize,
+) -> ToolResult {
+    if failed_calls.is_empty() {
+        return reply;
+    }
+    let reason = tool_result_text(reply);
+    unknown_effect_after_failed_calls(failed_calls, |failed| {
+        format!(
+            "Element [{idx}]'s click failed to send after an earlier pattern call failed \
+             ({failed}): {reason} The click effect is unknown; inspect the target state before \
+             another action."
+        )
+    })
 }
 
 fn capture_admission_refusal(error: anyhow::Error) -> ToolResult {
@@ -1233,15 +1252,25 @@ impl Tool for ClickTool {
                     };
                     background_element_click_result(message, transport, failed_calls)
                 }
-                Ok(Err(error)) if inject => {
+                Ok(Err(error)) if inject => background_send_failure(
                     crate::input::delivery::background_unavailable_error_with_cause(
                         hwnd,
                         EventKind::MouseClick,
                         error.to_string(),
-                    )
-                }
-                Ok(Err(error)) => ToolResult::error(error.to_string()),
-                Err(error) => ToolResult::error(format!("Task error: {error}")),
+                    ),
+                    &failed_calls,
+                    idx,
+                ),
+                Ok(Err(error)) => background_send_failure(
+                    ToolResult::error(error.to_string()),
+                    &failed_calls,
+                    idx,
+                ),
+                Err(error) => background_send_failure(
+                    ToolResult::error(format!("Task error: {error}")),
+                    &failed_calls,
+                    idx,
+                ),
             }
         } else if let (Some(mut px), Some(mut py)) = (x, y) {
             let from_zoom = args
@@ -1673,6 +1702,33 @@ mod background_click_refusal_tests {
         assert_eq!(structured["effect"], "unverifiable");
         assert_eq!(structured["path"], "ax");
         assert_eq!(structured["failed_calls"], json!(["WindowsUiaInvoke"]));
+        assert_eq!(structured["reason"], "earlier_call_failed");
+    }
+
+    #[test]
+    fn a_failed_send_after_a_failed_pattern_call_has_an_unknown_effect() {
+        let kept = super::background_send_failure(refusal("background_occluded"), &[], 4);
+        assert_eq!(
+            kept.structured_content,
+            refusal("background_occluded").structured_content
+        );
+
+        let wrapped = super::background_send_failure(
+            refusal("background_occluded"),
+            &[
+                ActionTransport::WindowsUiaInvoke,
+                ActionTransport::WindowsUiaToggle,
+            ],
+            4,
+        );
+        let structured = wrapped.structured_content.expect("structured reply");
+        assert_eq!(structured["code"], "background_unavailable");
+        assert_eq!(structured["effect"], "unverifiable");
+        assert_eq!(structured["reason"], "earlier_call_failed");
+        assert_eq!(
+            structured["failed_calls"],
+            json!(["WindowsUiaInvoke", "WindowsUiaToggle"])
+        );
     }
 }
 
