@@ -835,7 +835,7 @@ impl Tool for ClickTool {
                         });
                 let (cx, cy) = match scrolled {
                     Some(Err(())) => {
-                        return super::impl_::element_not_visible_refusal(format!(
+                        return super::impl_::app_unresponsive_refusal(format!(
                             "Element [{idx}] did not answer whether it scrolled into view within \
                              4 s (its app took longer, or has not returned an earlier UI \
                              Automation call), so a foreground click was refused before any \
@@ -1007,7 +1007,7 @@ impl Tool for ClickTool {
                         };
                         let pattern_refusal = |failed_calls: &[ActionTransport]| {
                             if failed_calls.is_empty() {
-                                return Box::new(super::impl_::element_not_visible_refusal(format!(
+                                return Box::new(super::impl_::app_unresponsive_refusal(format!(
                                     "Element [{idx}] did not answer for its UI Automation pattern \
                                      (its app took over 2 s, or has not returned an earlier UI \
                                      Automation call), so clicking was refused before any input. \
