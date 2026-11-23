@@ -2127,6 +2127,9 @@ async fn verified_hit_click(
                 if !element.observed_identity_is_current() {
                     return Err(PostError::Refused(Box::new(identity_refusal())));
                 }
+                if ensure_sheet_target(&element).is_err() {
+                    return Err(PostError::Refused(Box::new(sheet_refusal())));
+                }
                 crate::input::mouse::click_at_warped_xy_desktop(prompt, x, y, count)
                     .map_err(post_error)
             },
