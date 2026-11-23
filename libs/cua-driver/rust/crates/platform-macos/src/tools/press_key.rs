@@ -562,21 +562,19 @@ impl Tool for PressKeyTool {
                 };
                 let chromium_embedder = !fg
                     && !confirmed
+                    && !under_lock
                     && tokio::task::spawn_blocking(move || {
                         super::type_text::is_chromium_embedder(pid)
                     })
                     .await
                     .unwrap_or(false);
                 let mut structured = delivered_structured(confirmed, fg, chromium_embedder);
-                let note = if structured.get("escalation").is_some() {
-                    format!(" {}", super::CHROMIUM_BACKGROUND_KEY_NOTE)
-                } else {
-                    String::new()
-                };
                 changes.add_window_identity(&mut structured);
                 let note = if under_lock {
                     structured["locked_input"] = true.into();
                     super::under_lock_note(pid)
+                } else if structured.get("escalation").is_some() {
+                    format!(" {}", super::CHROMIUM_BACKGROUND_KEY_NOTE)
                 } else {
                     String::new()
                 };
