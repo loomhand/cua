@@ -14,7 +14,7 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 
 | Patch | Upstream |
 |---|---|
-| macOS and Windows: `click` with `verify_hit` fronts an element's window and posts a pixel click at its centre only when the hit test there finds the element, and on macOS like any desktop click refuses a point on a security or consent prompt (upstream [#7338](https://github.com/trycua/cua/pull/7338)); a Linux `click` refuses `verify_hit` as an unknown argument | RFC [#6031](https://github.com/trycua/cua/issues/6031) |
+| macOS and Windows: `click` with `verify_hit` fronts an element's window and posts a pixel click at its centre only when the hit test there finds the element, and on macOS like any desktop click refuses a point on a security or consent prompt (upstream [#7338](https://github.com/trycua/cua/pull/7338)) and, like an element click, a control behind an attached sheet (upstream [#7798](https://github.com/trycua/cua/pull/7798)); a Linux `click` refuses `verify_hit` as an unknown argument | RFC [#6031](https://github.com/trycua/cua/issues/6031) |
 | macOS: background text to kitty goes in as an AXValue write, which kitty commits to its pty without a key window; a blank kitty read-back is unverified, not zero delivered | [#6029](https://github.com/trycua/cua/pull/6029) |
 | macOS: find a window on another Space through the app's focused and main window before the remote-token probe, and note when an own-renderer app's off-Space pixels are stale | [#6030](https://github.com/trycua/cua/pull/6030) |
 | macOS: the live on-screen order that ranks `z_index` (upstream [#8158](https://github.com/trycua/cua/pull/8158)) comes from an ids-only on-screen window list, read only where `z_index` is read, so no other window enumeration makes a second pass | fork only |
@@ -27,7 +27,6 @@ A fork of [trycua/cua](https://github.com/trycua/cua) that carries Linux X11, ma
 | macOS: background `type_text` and `press_key` with `locked_input:true` send pid-routed keys while the screen is locked, unverified; every other route still refuses with `screen_locked` | [#6158](https://github.com/trycua/cua/pull/6158) |
 | macOS: a `locked_input` reply names where the keys went: the lock screen for loginwindow's pid, otherwise the key window of that pid as it was before the lock | with [#6158](https://github.com/trycua/cua/pull/6158) |
 | macOS: the key-window records `type_text` posts never defocus the window they make key, so a Qt window without a focused accessibility element (WeChat) keeps its focused field | [#6156](https://github.com/trycua/cua/pull/6156) |
-| Linux: a pid whose app did not answer `GetChildren` gets `app_unresponsive` at once, without a walk, until a `GetState` probe to its root gets a reply | [#6991](https://github.com/trycua/cua/pull/6991) |
 | Windows: a service-mode daemon claims its pipe name with its first instance (`FILE_FLAG_FIRST_PIPE_INSTANCE`), as an embedded one already did, so it never joins a name another server holds | fork only, reported upstream |
 | Windows: the daemon's clients refuse a named pipe whose server process runs as another Windows account | fork only, reported upstream |
 | Windows: `type_text`'s tail repair and read-back accept text that replaced a selection, so the repair no longer types a shared end again ("abcc"), and an unchanged value is reported as dropped or typed over an identical selection, not as a firm drop; the read-back also matches a multi-line text that an Edit control stores with CRLF | [#7065](https://github.com/trycua/cua/pull/7065) |
@@ -58,6 +57,7 @@ Before a box image moves its cua-driver pin to `dev`:
 
 Upstream already:
 
+- return `app_unresponsive` at once, without a walk, for a Linux app that did not answer `GetChildren`, while one `GetState` probe to its root is pending ([#8380](https://github.com/trycua/cua/pull/8380), salvaged from [#6991](https://github.com/trycua/cua/pull/6991), in cua-driver-rs 0.60.0);
 - rebase Chromium screen extents only from a frame the size of the target window ([#8167](https://github.com/trycua/cua/pull/8167), salvaged from [#5414](https://github.com/trycua/cua/pull/5414), in cua-driver-rs 0.55.1);
 - return at once from macOS `bring_to_front` when the exact window is already the focused frontmost window, which AppKit must agree is frontmost ([#8163](https://github.com/trycua/cua/pull/8163), salvaged from [#5411](https://github.com/trycua/cua/pull/5411), in cua-driver-rs 0.55.1);
 - accept a Windows click that closes or hides an unowned target window ([#8166](https://github.com/trycua/cua/pull/8166), salvaged from [#5412](https://github.com/trycua/cua/pull/5412), in cua-driver-rs 0.55.1), which replaced the fork's rule that accepted a destroyed target, owned dialogs included, with any foreground window;
