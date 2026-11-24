@@ -230,7 +230,7 @@ fn set_window_frame() -> ToolContract {
 fn invoke_menu() -> ToolContract {
     contract::<InvokeMenuInput, ActionResult>(
         "invoke_menu",
-        "Resolve an exact application-menu path one live native level at a time and normally invoke its final item through accessibility APIs. Missing, ambiguous, structurally mismatched, and other disabled segments fail closed; this tool never falls back to pixels. On macOS, a disabled Save (⌘S) in a background document window with a known document path is saved through the app’s scripting interface using Apple Events instead, without activating the app. This requires per-app Automation consent and may show macOS’s first-use consent prompt; denied permission refuses the save.",
+        "Resolve an exact application-menu path one live native level at a time and normally invoke its final item through accessibility APIs. Missing, ambiguous, structurally mismatched, and other disabled segments fail closed; this tool never falls back to pixels. On macOS, a disabled Save (⌘S) in a background document window with a known document path is saved through the app’s scripting interface using Apple Events instead, without activating the app. This requires per-app Automation consent: an app not yet asked is refused on every call until consent is granted, while macOS is asked for that consent once at a time, and denied permission refuses the save.",
         &[
             "menu.path.invoke",
             "accessibility.menu.native",
