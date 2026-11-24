@@ -684,6 +684,7 @@ mod tests {
             "without activating the app",
             "per-app Automation consent",
             "an app not yet asked is refused on every call until consent is granted",
+            "with serve --no-automation-prompts it is refused with `automation_consent_required` and macOS is not asked",
             "denied permission refuses the save",
             "never falls back to pixels",
         ] {
