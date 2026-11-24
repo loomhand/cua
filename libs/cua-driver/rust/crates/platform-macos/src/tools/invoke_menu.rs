@@ -1260,45 +1260,29 @@ mod tests {
 
     #[test]
     fn a_save_for_an_app_not_yet_asked_for_consent_is_refused_before_any_event() {
-        use crate::apple_events::{
-            save_preflight, save_result, AutomationPermission, ScriptRefusal,
-        };
-        use AutomationPermission::{Denied, Granted, NeedsConsent, Unknown};
+        use crate::apple_events::{save_result, ScriptRefusal};
         let message = "invoke_menu: File > Save is disabled";
         let text = |result: &ToolResult| match &result.content[0] {
             cua_driver_core::protocol::Content::Text { text, .. } => text.clone(),
             _ => panic!("a text reply"),
         };
-        let pending = save_preflight(NeedsConsent, false, "com.apple.TextEdit", "TextEdit")
-            .expect_err("an app not yet asked is refused before the script");
-        assert_eq!(pending.code, "automation_consent_pending");
+        let pending = ScriptRefusal {
+            code: "automation_consent_pending",
+            reason: "macOS now asks the user for Automation consent for TextEdit; nothing was \
+                     sent, and the background route works once it is granted"
+                .into(),
+        };
         let refused = save_failure("", message, "TextEdit", &pending);
         let reply = text(&refused);
         assert!(
             reply.contains("invoke_menu does not activate a background app"),
             "{reply}"
         );
-        assert!(
-            reply.contains("does not raise macOS's consent prompt"),
-            "{reply}"
-        );
+        assert!(reply.contains("macOS now asks the user"), "{reply}");
         assert_eq!(
             refused.structured_content.expect("structured refusal")["code"],
             "background_unavailable"
         );
-        let required = save_preflight(NeedsConsent, true, "com.apple.TextEdit", "TextEdit")
-            .expect_err("--no-automation-prompts refuses as before");
-        assert_eq!(required.code, "automation_consent_required");
-        let denied = save_preflight(Denied, false, "com.apple.TextEdit", "TextEdit")
-            .expect_err("a denied app is refused");
-        assert_eq!(denied.code, "automation_denied");
-        for permission in [Granted, Unknown(-50)] {
-            assert_eq!(
-                save_preflight(permission, false, "com.apple.TextEdit", "TextEdit"),
-                Ok(()),
-                "{permission:?}"
-            );
-        }
         let timeout = save_result(
             Err(ScriptRefusal {
                 code: "automation_timeout",

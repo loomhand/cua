@@ -49,9 +49,9 @@ fn def() -> &'static ToolDef {
                menu item's key equivalent (cmd+s, cmd+w, ...) and the app is not in \
                front, that menu item runs through accessibility instead (a disabled \
                Save is saved through the app's scripting interface using Apple Events \
-               and verified on disk; this requires per-app Automation consent already \
-               granted, an app not yet asked is refused without raising macOS’s consent \
-               prompt, and denied permission refuses the save); \
+               and verified on disk; this requires per-app Automation consent, an app not \
+               yet asked is refused once while macOS asks the user for that consent, and \
+               denied permission refuses the save); \
                a menu item macOS keeps disabled in the background is refused \
                with `background_unavailable`. With serve --no-automation-prompts, \
                scripting without granted consent refuses with `automation_consent_required`, \
@@ -799,7 +799,7 @@ mod tests {
         for phrase in [
             "Apple Events",
             "per-app Automation consent",
-            "an app not yet asked is refused without raising macOS’s consent",
+            "an app not yet asked is refused once while macOS asks the user for that consent",
             "denied permission refuses the save",
             "a menu item macOS keeps disabled in the background",
             "automation_consent_required",
