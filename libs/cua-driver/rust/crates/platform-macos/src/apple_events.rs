@@ -17,14 +17,17 @@
 //! may trigger a consent prompt. With `serve --no-automation-prompts`, only
 //! explicitly granted targets may receive scripting actions.
 
+use std::collections::BTreeSet;
 use std::ffi::c_void;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 static REFUSE_UNGRANTED_AUTOMATION: AtomicBool = AtomicBool::new(false);
+static CONSENT_ASKS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
 pub fn refuse_ungranted_automation(refuse: bool) {
     REFUSE_UNGRANTED_AUTOMATION.store(refuse, Ordering::Release);
@@ -82,6 +85,10 @@ fn permission_from_status(status: i32) -> AutomationPermission {
 
 /// Read this process's Automation permission for `bundle_id` without asking.
 pub fn automation_permission(bundle_id: &str) -> AutomationPermission {
+    determine_permission(bundle_id, false)
+}
+
+fn determine_permission(bundle_id: &str, ask_user: bool) -> AutomationPermission {
     let mut desc = AeDesc {
         descriptor_type: 0,
         data_handle: std::ptr::null_mut(),
@@ -98,8 +105,14 @@ pub fn automation_permission(bundle_id: &str) -> AutomationPermission {
     if created != 0 {
         return AutomationPermission::Unknown(created as i32);
     }
-    let status =
-        unsafe { AEDeterminePermissionToAutomateTarget(&desc, TYPE_WILDCARD, TYPE_WILDCARD, 0) };
+    let status = unsafe {
+        AEDeterminePermissionToAutomateTarget(
+            &desc,
+            TYPE_WILDCARD,
+            TYPE_WILDCARD,
+            u8::from(ask_user),
+        )
+    };
     unsafe { AEDisposeDesc(&mut desc) };
     permission_from_status(status)
 }
@@ -188,11 +201,15 @@ fn script_error_refusal(stderr: &str) -> ScriptRefusal {
 }
 
 pub(crate) fn ensure_permitted(bundle_id: &str, app_name: &str) -> Result<(), ScriptRefusal> {
+    let target = bundle_id.to_owned();
     check_permission(
         automation_permission(bundle_id),
         REFUSE_UNGRANTED_AUTOMATION.load(Ordering::Acquire),
         bundle_id,
         app_name,
+        move || {
+            determine_permission(&target, true);
+        },
     )
 }
 
@@ -201,6 +218,7 @@ fn check_permission(
     refuse_ungranted: bool,
     bundle_id: &str,
     app_name: &str,
+    ask: impl FnOnce() + Send + 'static,
 ) -> Result<(), ScriptRefusal> {
     match permission {
         AutomationPermission::Denied => Err(ScriptRefusal {
@@ -231,7 +249,34 @@ fn check_permission(
                 ),
             })
         }
+        AutomationPermission::NeedsConsent => {
+            ask_once(bundle_id, ask);
+            Err(ScriptRefusal {
+                code: "automation_consent_pending",
+                reason: format!(
+                    "macOS now asks the user for Automation consent for {app_name}; nothing was \
+                     sent, and the background route works once it is granted"
+                ),
+            })
+        }
         _ => Ok(()),
+    }
+}
+
+fn ask_once(bundle_id: &str, ask: impl FnOnce() + Send + 'static) {
+    let asking = || CONSENT_ASKS.lock().unwrap_or_else(PoisonError::into_inner);
+    if !asking().insert(bundle_id.to_owned()) {
+        return;
+    }
+    let key = bundle_id.to_owned();
+    let spawned = std::thread::Builder::new()
+        .name("cua-automation-ask".into())
+        .spawn(move || {
+            ask();
+            asking().remove(&key);
+        });
+    if spawned.is_err() {
+        asking().remove(bundle_id);
     }
 }
 
@@ -411,12 +456,7 @@ pub fn save_document(
     app_name: &str,
     path: &Path,
 ) -> Result<SavedDocument, ScriptRefusal> {
-    save_preflight(
-        automation_permission(bundle_id),
-        REFUSE_UNGRANTED_AUTOMATION.load(Ordering::Acquire),
-        bundle_id,
-        app_name,
-    )?;
+    ensure_permitted(bundle_id, app_name)?;
     let before = modified_time(path);
     let path_text = path.to_string_lossy();
     let result = run_script(
@@ -427,25 +467,6 @@ pub fn save_document(
     save_result(result, app_name, path)?;
     let file_written = wait_for_new_mtime(path, before, Duration::from_millis(1500));
     Ok(SavedDocument { file_written })
-}
-
-pub(crate) fn save_preflight(
-    permission: AutomationPermission,
-    refuse_ungranted: bool,
-    bundle_id: &str,
-    app_name: &str,
-) -> Result<(), ScriptRefusal> {
-    check_permission(permission, refuse_ungranted, bundle_id, app_name)?;
-    if permission == AutomationPermission::NeedsConsent {
-        return Err(ScriptRefusal {
-            code: "automation_consent_pending",
-            reason: format!(
-                "Cua Driver has no Automation permission for {app_name} yet, and a background \
-                 save does not raise macOS's consent prompt, so nothing was sent"
-            ),
-        });
-    }
-    Ok(())
 }
 
 pub(crate) fn save_result(
@@ -577,14 +598,19 @@ mod tests {
                 (AutomationPermission::NotRunning, Some("automation_failed")),
                 (
                     AutomationPermission::NeedsConsent,
-                    refuse.then_some("automation_consent_required"),
+                    Some(if refuse {
+                        "automation_consent_required"
+                    } else {
+                        "automation_consent_pending"
+                    }),
                 ),
                 (
                     AutomationPermission::Unknown(-50),
                     refuse.then_some("automation_consent_required"),
                 ),
             ] {
-                let result = check_permission(permission, refuse, "com.apple.TextEdit", "TextEdit");
+                let result =
+                    check_permission(permission, refuse, "com.apple.TextEdit", "TextEdit", || {});
                 assert_eq!(result.as_ref().err().map(|r| r.code), expected);
                 if expected == Some("automation_consent_required") {
                     let reason = result.unwrap_err().reason;
@@ -601,6 +627,83 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn an_app_not_yet_asked_is_refused_at_once_while_macos_asks_once() {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::{mpsc, Arc};
+        const BUNDLE: &str = "test.cua.consent-ask-once";
+        let pending = |ask: Box<dyn FnOnce() + Send>| {
+            check_permission(
+                AutomationPermission::NeedsConsent,
+                false,
+                BUNDLE,
+                "TextEdit",
+                ask,
+            )
+        };
+        let wait_for = |done: &dyn Fn() -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !done() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            done()
+        };
+        let asks = Arc::new(AtomicUsize::new(0));
+        let (release, released) = mpsc::channel::<()>();
+        let (answered, answer) = mpsc::channel();
+        let first_asks = asks.clone();
+        std::thread::spawn(move || {
+            let _ = answered.send(pending(Box::new(move || {
+                first_asks.fetch_add(1, Ordering::SeqCst);
+                let _ = released.recv();
+            })));
+        });
+        let first = answer
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the refusal does not wait for the ask")
+            .expect_err("an app not yet asked is refused");
+        assert_eq!(first.code, "automation_consent_pending");
+        assert!(
+            first.reason.contains("macOS now asks the user"),
+            "{}",
+            first.reason
+        );
+        assert!(
+            wait_for(&|| asks.load(Ordering::SeqCst) == 1),
+            "the ask started"
+        );
+
+        let second_asks = asks.clone();
+        let second = pending(Box::new(move || {
+            second_asks.fetch_add(1, Ordering::SeqCst);
+        }))
+        .expect_err("refused while the ask is pending");
+        assert_eq!(second.code, "automation_consent_pending");
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            asks.load(Ordering::SeqCst),
+            1,
+            "no second ask while one is pending"
+        );
+
+        release.send(()).expect("release the ask");
+        assert!(
+            wait_for(&|| !CONSENT_ASKS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains(BUNDLE)),
+            "the finished ask is forgotten"
+        );
+        let third_asks = asks.clone();
+        let _ = pending(Box::new(move || {
+            third_asks.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert!(
+            wait_for(&|| asks.load(Ordering::SeqCst) == 2),
+            "a later save asks again"
+        );
     }
 
     #[test]
