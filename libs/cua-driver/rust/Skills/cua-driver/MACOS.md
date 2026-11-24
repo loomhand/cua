@@ -113,7 +113,7 @@ refuses immediately with `automation_consent_required`, naming the app and
 System Settings > Privacy & Security > Automation; no scripting action or
 keyboard fallback is sent. Grant consent with the user's authorization before
 retrying. This does not suppress Accessibility/Screen Recording onboarding or
-other unrelated OS prompts. Omit the flag to preserve prompt-on-first-use behavior.
+other unrelated OS prompts. Omit the flag and macOS is asked for consent in the background; the call that triggers the ask is refused until consent is granted.
 With the app already in front it resolves every AX level live. Prefer an in-window
 element action when the same command has an ordinary control, and prefer
 `set_window_frame` for exact geometry. Full rationale is in “Navigating native
