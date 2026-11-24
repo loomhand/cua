@@ -250,23 +250,30 @@ fn check_permission(
             })
         }
         AutomationPermission::NeedsConsent => {
-            ask_once(bundle_id, ask);
+            let reason = if ask_once(bundle_id, ask) {
+                format!(
+                    "macOS may ask the user for Automation consent for {app_name}; nothing was \
+                     sent, and the background route works once it is granted"
+                )
+            } else {
+                format!(
+                    "the Automation consent request for {app_name} could not be started; \
+                     nothing was sent"
+                )
+            };
             Err(ScriptRefusal {
                 code: "automation_consent_pending",
-                reason: format!(
-                    "macOS now asks the user for Automation consent for {app_name}; nothing was \
-                     sent, and the background route works once it is granted"
-                ),
+                reason,
             })
         }
         _ => Ok(()),
     }
 }
 
-fn ask_once(bundle_id: &str, ask: impl FnOnce() + Send + 'static) {
+fn ask_once(bundle_id: &str, ask: impl FnOnce() + Send + 'static) -> bool {
     let asking = || CONSENT_ASKS.lock().unwrap_or_else(PoisonError::into_inner);
     if !asking().insert(bundle_id.to_owned()) {
-        return;
+        return true;
     }
     let key = bundle_id.to_owned();
     let spawned = std::thread::Builder::new()
@@ -277,7 +284,9 @@ fn ask_once(bundle_id: &str, ask: impl FnOnce() + Send + 'static) {
         });
     if spawned.is_err() {
         asking().remove(bundle_id);
+        return false;
     }
+    true
 }
 
 const FINDER_BUNDLE_ID: &str = "com.apple.finder";
@@ -666,7 +675,7 @@ mod tests {
             .expect_err("an app not yet asked is refused");
         assert_eq!(first.code, "automation_consent_pending");
         assert!(
-            first.reason.contains("macOS now asks the user"),
+            first.reason.contains("macOS may ask the user"),
             "{}",
             first.reason
         );
