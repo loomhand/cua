@@ -411,9 +411,8 @@ pub fn save_document(
     app_name: &str,
     path: &Path,
 ) -> Result<SavedDocument, ScriptRefusal> {
-    let permission = automation_permission(bundle_id);
-    check_permission(
-        permission,
+    save_preflight(
+        automation_permission(bundle_id),
         REFUSE_UNGRANTED_AUTOMATION.load(Ordering::Acquire),
         bundle_id,
         app_name,
@@ -425,45 +424,40 @@ pub fn save_document(
         &[&path_text, bundle_id],
         Duration::from_secs(30),
     );
-    save_result(
-        result,
-        permission,
-        || automation_permission(bundle_id),
-        app_name,
-        path,
-    )?;
+    save_result(result, app_name, path)?;
     let file_written = wait_for_new_mtime(path, before, Duration::from_millis(1500));
     Ok(SavedDocument { file_written })
 }
 
+pub(crate) fn save_preflight(
+    permission: AutomationPermission,
+    refuse_ungranted: bool,
+    bundle_id: &str,
+    app_name: &str,
+) -> Result<(), ScriptRefusal> {
+    check_permission(permission, refuse_ungranted, bundle_id, app_name)?;
+    if permission == AutomationPermission::NeedsConsent {
+        return Err(ScriptRefusal {
+            code: "automation_consent_pending",
+            reason: format!(
+                "Cua Driver has no Automation permission for {app_name} yet, and a background \
+                 save does not raise macOS's consent prompt, so nothing was sent"
+            ),
+        });
+    }
+    Ok(())
+}
+
 pub(crate) fn save_result(
     result: Result<String, ScriptRefusal>,
-    before: AutomationPermission,
-    after: impl FnOnce() -> AutomationPermission,
     app_name: &str,
     path: &Path,
 ) -> Result<(), ScriptRefusal> {
     let answer = match result {
         Err(refusal) if refusal.code == "automation_timeout" => {
-            let after = (before == AutomationPermission::NeedsConsent).then(after);
-            return Err(match after {
-                Some(AutomationPermission::NeedsConsent) => ScriptRefusal {
-                    code: "automation_consent_pending",
-                    reason: format!(
-                        "Cua Driver still has no Automation permission for {app_name} (a macOS \
-                         consent prompt may be waiting for the user), so no save reached it"
-                    ),
-                },
-                Some(AutomationPermission::Denied) => ScriptRefusal {
-                    code: "automation_consent_declined",
-                    reason: format!(
-                        "the user declined Automation for {app_name}, so no save reached it"
-                    ),
-                },
-                _ => ScriptRefusal {
-                    code: refusal.code,
-                    reason: format!("{app_name} did not answer within 30 s"),
-                },
+            return Err(ScriptRefusal {
+                code: refusal.code,
+                reason: format!("{app_name} did not answer within 30 s"),
             });
         }
         result => result?,
@@ -542,21 +536,16 @@ mod tests {
     fn a_save_whose_modified_flag_cannot_be_read_is_unconfirmed() {
         assert!(SAVE_DOCUMENT_SCRIPT.contains("on error\n\t\t\t\t\treturn \"saved-unread\""));
         let path = Path::new("/tmp/a.txt");
-        let granted = AutomationPermission::Granted;
-        let after = || AutomationPermission::Granted;
-        let unread = save_result(Ok("saved-unread".into()), granted, after, "TextEdit", path)
+        let unread = save_result(Ok("saved-unread".into()), "TextEdit", path)
             .expect_err("an unread flag does not confirm the save");
         assert_eq!(unread.code, "save_unconfirmed");
-        assert_eq!(
-            save_result(Ok("false".into()), granted, after, "TextEdit", path),
-            Ok(())
-        );
+        assert_eq!(save_result(Ok("false".into()), "TextEdit", path), Ok(()));
         let failed = ScriptRefusal {
             code: "automation_failed",
             reason: "the save raised".into(),
         };
         assert_eq!(
-            save_result(Err(failed.clone()), granted, after, "TextEdit", path),
+            save_result(Err(failed.clone()), "TextEdit", path),
             Err(failed)
         );
     }
