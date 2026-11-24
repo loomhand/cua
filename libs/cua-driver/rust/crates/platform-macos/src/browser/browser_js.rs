@@ -47,9 +47,6 @@ impl BrowserJs {
         let app_name = app_name_for_bundle(bundle_id)
             .ok_or_else(|| anyhow::anyhow!("Unsupported browser bundle: {bundle_id}"))?;
 
-        crate::apple_events::ensure_permitted(bundle_id, app_name)
-            .map_err(|r| anyhow::anyhow!("{}: {}", r.code, r.reason))?;
-
         // Resolve the WindowServer CGWindowID to stable properties that can be
         // matched against the browser's AppleScript window model.
         let target = {
@@ -57,13 +54,15 @@ impl BrowserJs {
             tokio::task::spawn_blocking(move || native_window_target(wid)).await?
         }?;
 
-        if target.pid != expected_pid {
-            anyhow::bail!(
-                "browser_window_owner_pid_mismatch: window_id {window_id} is owned by pid {}, not requested pid {expected_pid}",
-                target.pid
-            );
-        }
-        ensure_applescript_process_identity(bundle_id, expected_pid)?;
+        admit(
+            bundle_id,
+            app_name,
+            expected_pid,
+            window_id,
+            target.pid,
+            &applescript_pids(bundle_id),
+            crate::apple_events::ensure_permitted,
+        )?;
 
         let escaped_js = escape_js_for_applescript(javascript);
 
@@ -117,14 +116,40 @@ fn native_window_target(window_id: u32) -> anyhow::Result<NativeWindowTarget> {
     })
 }
 
-fn ensure_applescript_process_identity(bundle_id: &str, expected_pid: i32) -> anyhow::Result<()> {
-    let matching_pids = crate::apps::list_running_apps()
+fn scripting_bundle(bundle_id: &str) -> &str {
+    if bundle_id.starts_with(CHROME_APP_BUNDLE_PREFIX) {
+        "com.google.Chrome"
+    } else {
+        bundle_id
+    }
+}
+
+fn admit(
+    bundle_id: &str,
+    app_name: &str,
+    expected_pid: i32,
+    window_id: u32,
+    owner_pid: i32,
+    matching_pids: &[i32],
+    permitted: impl FnOnce(&str, &str) -> Result<(), crate::apple_events::ScriptRefusal>,
+) -> anyhow::Result<()> {
+    permitted(scripting_bundle(bundle_id), app_name)
+        .map_err(|r| anyhow::anyhow!("{}: {}", r.code, r.reason))?;
+    if owner_pid != expected_pid {
+        anyhow::bail!(
+            "browser_window_owner_pid_mismatch: window_id {window_id} is owned by pid {owner_pid}, not requested pid {expected_pid}"
+        );
+    }
+    ensure_applescript_process_identity_in(bundle_id, expected_pid, matching_pids)
+}
+
+fn applescript_pids(bundle_id: &str) -> Vec<i32> {
+    crate::apps::list_running_apps()
         .into_iter()
         .filter(|app| app.bundle_id.as_deref() == Some(bundle_id))
         .map(|app| app.pid)
         .filter(|pid| process_is_alive(*pid))
-        .collect::<Vec<_>>();
-    ensure_applescript_process_identity_in(bundle_id, expected_pid, &matching_pids)
+        .collect()
 }
 
 fn process_is_alive(pid: i32) -> bool {
@@ -331,6 +356,34 @@ mod tests {
     fn process_liveness_filters_departed_running_application_rows() {
         assert!(process_is_alive(std::process::id() as i32));
         assert!(!process_is_alive(i32::MAX));
+    }
+
+    #[test]
+    fn a_chrome_app_shim_is_scripted_and_permitted_as_google_chrome() {
+        let shim = "com.google.Chrome.app.kjgfgldnnfoeklkmfkjfagphfepbbdan";
+        assert_eq!(scripting_bundle(shim), "com.google.Chrome");
+        assert_eq!(scripting_bundle("com.brave.Browser"), "com.brave.Browser");
+        assert_eq!(app_name_for_bundle(shim), Some("Google Chrome"));
+        let chrome_granted = |bundle: &str, _: &str| {
+            if bundle == "com.google.Chrome" {
+                Ok(())
+            } else {
+                Err(crate::apple_events::ScriptRefusal {
+                    code: "automation_consent_pending",
+                    reason: format!("{bundle} was never asked"),
+                })
+            }
+        };
+        admit(
+            shim,
+            "Google Chrome",
+            4242,
+            7,
+            4242,
+            &[4242],
+            chrome_granted,
+        )
+        .expect("a shim window runs when Google Chrome is authorized");
     }
 
     #[test]
