@@ -1259,75 +1259,67 @@ mod tests {
     }
 
     #[test]
-    fn a_save_that_timed_out_at_the_consent_prompt_is_refused_as_unavailable() {
-        use crate::apple_events::{save_result, AutomationPermission, ScriptRefusal};
-        use AutomationPermission::{Denied, Granted, NeedsConsent, Unknown};
-        let timed_out = |before: AutomationPermission, after: AutomationPermission| {
-            let refusal = save_result(
-                Err(ScriptRefusal {
-                    code: "automation_timeout",
-                    reason: "the app did not answer within 30 s (a macOS Automation prompt may be \
-                             waiting for the user)"
-                        .into(),
-                }),
-                before,
-                || after,
-                "TextEdit",
-                std::path::Path::new("/tmp/a.txt"),
-            )
-            .expect_err("a timeout fails the save");
-            save_failure(
-                "",
-                "invoke_menu: File > Save is disabled",
-                "TextEdit",
-                &refusal,
-            )
+    fn a_save_for_an_app_not_yet_asked_for_consent_is_refused_before_any_event() {
+        use crate::apple_events::{
+            save_preflight, save_result, AutomationPermission, ScriptRefusal,
         };
+        use AutomationPermission::{Denied, Granted, NeedsConsent, Unknown};
+        let message = "invoke_menu: File > Save is disabled";
         let text = |result: &ToolResult| match &result.content[0] {
             cua_driver_core::protocol::Content::Text { text, .. } => text.clone(),
             _ => panic!("a text reply"),
         };
-        for (before, after, refused) in [
-            (NeedsConsent, NeedsConsent, true),
-            (NeedsConsent, Denied, true),
-            (Granted, Unknown(-50), false),
-            (Granted, Denied, false),
-            (NeedsConsent, Granted, false),
-            (Unknown(-50), Denied, false),
-            (Unknown(-50), NeedsConsent, false),
-        ] {
-            let result = timed_out(before, after);
-            let reply = text(&result);
-            let data = result.structured_content.expect("structured result");
-            let case = format!("{before:?} then {after:?}");
+        let pending = save_preflight(NeedsConsent, false, "com.apple.TextEdit", "TextEdit")
+            .expect_err("an app not yet asked is refused before the script");
+        assert_eq!(pending.code, "automation_consent_pending");
+        let refused = save_failure("", message, "TextEdit", &pending);
+        let reply = text(&refused);
+        assert!(
+            reply.contains("invoke_menu does not activate a background app"),
+            "{reply}"
+        );
+        assert!(
+            reply.contains("does not raise macOS's consent prompt"),
+            "{reply}"
+        );
+        assert_eq!(
+            refused.structured_content.expect("structured refusal")["code"],
+            "background_unavailable"
+        );
+        let required = save_preflight(NeedsConsent, true, "com.apple.TextEdit", "TextEdit")
+            .expect_err("--no-automation-prompts refuses as before");
+        assert_eq!(required.code, "automation_consent_required");
+        let denied = save_preflight(Denied, false, "com.apple.TextEdit", "TextEdit")
+            .expect_err("a denied app is refused");
+        assert_eq!(denied.code, "automation_denied");
+        for permission in [Granted, Unknown(-50)] {
             assert_eq!(
-                reply.contains("invoke_menu does not activate a background app"),
-                refused,
-                "{case}"
+                save_preflight(permission, false, "com.apple.TextEdit", "TextEdit"),
+                Ok(()),
+                "{permission:?}"
             );
-            let code = if refused {
-                "background_unavailable"
-            } else {
-                "save_indeterminate"
-            };
-            assert_eq!(data["code"], code, "{case}");
-            if !refused {
-                assert!(!reply.contains("prompt may be waiting"), "{case}: {reply}");
-            }
         }
-        let declined = text(&timed_out(NeedsConsent, Denied));
+        let timeout = save_result(
+            Err(ScriptRefusal {
+                code: "automation_timeout",
+                reason: "the app did not answer within 30 s (a macOS Automation prompt may be \
+                         waiting for the user)"
+                    .into(),
+            }),
+            "TextEdit",
+            std::path::Path::new("/tmp/a.txt"),
+        )
+        .expect_err("a timeout fails the save");
+        let indeterminate = save_failure("", message, "TextEdit", &timeout);
+        let reply = text(&indeterminate);
+        assert!(!reply.contains("prompt may be waiting"), "{reply}");
         assert!(
-            declined.contains("the user declined Automation for TextEdit"),
-            "{declined}"
+            !reply.contains("invoke_menu does not activate a background app"),
+            "{reply}"
         );
-        assert!(
-            !declined.contains("still has no Automation permission"),
-            "{declined}"
-        );
-        let pending = text(&timed_out(NeedsConsent, NeedsConsent));
-        assert!(
-            pending.contains("consent prompt may be waiting"),
-            "{pending}"
+        assert_eq!(
+            indeterminate.structured_content.expect("structured result")["code"],
+            "save_indeterminate"
         );
     }
 
