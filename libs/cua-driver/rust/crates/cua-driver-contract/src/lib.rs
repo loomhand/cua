@@ -683,7 +683,7 @@ mod tests {
             "scripting interface using Apple Events",
             "without activating the app",
             "per-app Automation consent",
-            "may show macOS’s first-use consent prompt",
+            "an app not yet asked is refused on every call until consent is granted",
             "denied permission refuses the save",
             "never falls back to pixels",
         ] {
