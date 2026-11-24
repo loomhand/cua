@@ -61,6 +61,8 @@ impl BrowserJs {
             window_id,
             target.pid,
             &applescript_pids(bundle_id),
+            crate::apple_events::REFUSE_UNGRANTED_AUTOMATION
+                .load(std::sync::atomic::Ordering::Acquire),
             crate::apple_events::ensure_permitted,
         )?;
 
@@ -124,6 +126,7 @@ fn scripting_bundle(bundle_id: &str) -> &str {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn admit(
     bundle_id: &str,
     app_name: &str,
@@ -131,7 +134,8 @@ fn admit(
     window_id: u32,
     owner_pid: i32,
     matching_pids: &[i32],
-    permitted: impl FnOnce(&str, &str) -> Result<(), crate::apple_events::ScriptRefusal>,
+    prompts_off: bool,
+    permitted: impl Fn(&str, &str) -> Result<(), crate::apple_events::ScriptRefusal>,
 ) -> anyhow::Result<()> {
     if owner_pid != expected_pid {
         anyhow::bail!(
@@ -139,6 +143,9 @@ fn admit(
         );
     }
     ensure_applescript_process_identity_in(bundle_id, expected_pid, matching_pids)?;
+    if prompts_off && scripting_bundle(bundle_id) != bundle_id {
+        permitted(bundle_id, app_name).map_err(|r| anyhow::anyhow!("{}: {}", r.code, r.reason))?;
+    }
     permitted(scripting_bundle(bundle_id), app_name)
         .map_err(|r| anyhow::anyhow!("{}: {}", r.code, r.reason))
 }
@@ -381,9 +388,68 @@ mod tests {
             7,
             4242,
             &[4242],
+            false,
             chrome_granted,
         )
         .expect("a shim window runs when Google Chrome is authorized");
+    }
+
+    #[test]
+    fn without_prompts_an_app_shim_window_also_needs_its_own_automation_grant() {
+        fn grants(
+            shim_granted: bool,
+        ) -> impl Fn(&str, &str) -> Result<(), crate::apple_events::ScriptRefusal> {
+            move |bundle, _| {
+                if bundle == "com.google.Chrome" || shim_granted {
+                    Ok(())
+                } else {
+                    Err(crate::apple_events::ScriptRefusal {
+                        code: "automation_consent_required",
+                        reason: format!("{bundle} is not granted"),
+                    })
+                }
+            }
+        }
+        let shim = "com.google.Chrome.app.kjgfgldnnfoeklkmfkjfagphfepbbdan";
+        let refused = admit(
+            shim,
+            "Google Chrome",
+            4242,
+            7,
+            4242,
+            &[4242],
+            true,
+            grants(false),
+        )
+        .unwrap_err();
+        assert!(
+            refused
+                .to_string()
+                .starts_with("automation_consent_required"),
+            "{refused}"
+        );
+        admit(
+            shim,
+            "Google Chrome",
+            4242,
+            7,
+            4242,
+            &[4242],
+            true,
+            grants(true),
+        )
+        .expect("runs once both are granted");
+        admit(
+            shim,
+            "Google Chrome",
+            4242,
+            7,
+            4242,
+            &[4242],
+            false,
+            grants(false),
+        )
+        .expect("with prompts on only Google Chrome is checked");
     }
 
     #[test]
@@ -400,6 +466,7 @@ mod tests {
             7,
             4242,
             &[4242, 9001],
+            false,
             counted,
         )
         .unwrap_err();
@@ -413,6 +480,7 @@ mod tests {
             7,
             9001,
             &[4242],
+            false,
             counted,
         )
         .unwrap_err();

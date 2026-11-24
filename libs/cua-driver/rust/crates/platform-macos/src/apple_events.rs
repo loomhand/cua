@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-static REFUSE_UNGRANTED_AUTOMATION: AtomicBool = AtomicBool::new(false);
+pub(crate) static REFUSE_UNGRANTED_AUTOMATION: AtomicBool = AtomicBool::new(false);
 static CONSENT_ASKS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
 pub fn refuse_ungranted_automation(refuse: bool) {
