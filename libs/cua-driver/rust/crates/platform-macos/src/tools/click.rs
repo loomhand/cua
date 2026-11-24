@@ -2098,6 +2098,13 @@ async fn verified_hit_click(
     cursor_key: String,
     prompt: PromptInput,
 ) -> ToolResult {
+    let sheet_probe = element.clone();
+    let clear = tokio::task::spawn_blocking(move || ensure_sheet_target(&sheet_probe).is_ok())
+        .await
+        .unwrap_or(false);
+    if !clear {
+        return sheet_refusal();
+    }
     let probe = element.clone();
     // SAFETY: `probe` holds a +1 reference on the element for this call.
     let glide = tokio::task::spawn_blocking(move || unsafe {
