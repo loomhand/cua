@@ -1268,7 +1268,7 @@ mod tests {
         };
         let pending = ScriptRefusal {
             code: "automation_consent_pending",
-            reason: "macOS now asks the user for Automation consent for TextEdit; nothing was \
+            reason: "macOS may ask the user for Automation consent for TextEdit; nothing was \
                      sent, and the background route works once it is granted"
                 .into(),
         };
@@ -1278,7 +1278,7 @@ mod tests {
             reply.contains("invoke_menu does not activate a background app"),
             "{reply}"
         );
-        assert!(reply.contains("macOS now asks the user"), "{reply}");
+        assert!(reply.contains("macOS may ask the user"), "{reply}");
         assert_eq!(
             refused.structured_content.expect("structured refusal")["code"],
             "background_unavailable"
