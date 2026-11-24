@@ -133,14 +133,14 @@ fn admit(
     matching_pids: &[i32],
     permitted: impl FnOnce(&str, &str) -> Result<(), crate::apple_events::ScriptRefusal>,
 ) -> anyhow::Result<()> {
-    permitted(scripting_bundle(bundle_id), app_name)
-        .map_err(|r| anyhow::anyhow!("{}: {}", r.code, r.reason))?;
     if owner_pid != expected_pid {
         anyhow::bail!(
             "browser_window_owner_pid_mismatch: window_id {window_id} is owned by pid {owner_pid}, not requested pid {expected_pid}"
         );
     }
-    ensure_applescript_process_identity_in(bundle_id, expected_pid, matching_pids)
+    ensure_applescript_process_identity_in(bundle_id, expected_pid, matching_pids)?;
+    permitted(scripting_bundle(bundle_id), app_name)
+        .map_err(|r| anyhow::anyhow!("{}: {}", r.code, r.reason))
 }
 
 fn applescript_pids(bundle_id: &str) -> Vec<i32> {
@@ -384,6 +384,42 @@ mod tests {
             chrome_granted,
         )
         .expect("a shim window runs when Google Chrome is authorized");
+    }
+
+    #[test]
+    fn an_ambiguous_or_foreign_window_is_refused_before_any_consent_ask() {
+        let asks = std::cell::Cell::new(0);
+        let counted = |_: &str, _: &str| {
+            asks.set(asks.get() + 1);
+            Ok(())
+        };
+        let ambiguous = admit(
+            "com.google.Chrome",
+            "Google Chrome",
+            4242,
+            7,
+            4242,
+            &[4242, 9001],
+            counted,
+        )
+        .unwrap_err();
+        assert!(ambiguous
+            .to_string()
+            .contains("browser_applescript_process_ambiguous"));
+        let foreign = admit(
+            "com.google.Chrome",
+            "Google Chrome",
+            4242,
+            7,
+            9001,
+            &[4242],
+            counted,
+        )
+        .unwrap_err();
+        assert!(foreign
+            .to_string()
+            .contains("browser_window_owner_pid_mismatch"));
+        assert_eq!(asks.get(), 0, "no permission check or ask");
     }
 
     #[test]
