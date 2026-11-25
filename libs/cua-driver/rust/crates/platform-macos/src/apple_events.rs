@@ -85,6 +85,13 @@ fn permission_from_status(status: i32) -> AutomationPermission {
 
 /// Read this process's Automation permission for `bundle_id` without asking.
 pub fn automation_permission(bundle_id: &str) -> AutomationPermission {
+    if CONSENT_ASKS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains(bundle_id)
+    {
+        return AutomationPermission::NeedsConsent;
+    }
     determine_permission(bundle_id, false)
 }
 
@@ -713,6 +720,20 @@ mod tests {
             wait_for(&|| asks.load(Ordering::SeqCst) == 2),
             "a later save asks again"
         );
+    }
+
+    #[test]
+    fn a_pending_consent_ask_reads_as_needs_consent_without_an_apple_event() {
+        const BUNDLE: &str = "test.cua.consent-ask-in-flight";
+        let asking = || CONSENT_ASKS.lock().unwrap_or_else(PoisonError::into_inner);
+        assert_ne!(
+            automation_permission(BUNDLE),
+            AutomationPermission::NeedsConsent
+        );
+        asking().insert(BUNDLE.into());
+        let permission = automation_permission(BUNDLE);
+        asking().remove(BUNDLE);
+        assert_eq!(permission, AutomationPermission::NeedsConsent);
     }
 
     #[test]
