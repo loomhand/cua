@@ -184,17 +184,18 @@ pub fn run_script(script: &str, args: &[&str], timeout: Duration) -> Result<Stri
         return Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned());
     }
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    Err(script_error_refusal(&stderr, &host_app_name()))
+    Err(script_error_refusal(&stderr, host_app_name))
 }
 
 /// Map an osascript error line ("... (-1743)") to a refusal.
-fn script_error_refusal(stderr: &str, host_app: &str) -> ScriptRefusal {
+fn script_error_refusal(stderr: &str, host_app: impl FnOnce() -> String) -> ScriptRefusal {
     if stderr.contains("(-1743)") {
         ScriptRefusal {
             code: "automation_denied",
             reason: format!(
-                "macOS does not allow {host_app} to control this app (System Settings > \
-                 Privacy & Security > Automation)"
+                "macOS does not allow {} to control this app (System Settings > \
+                 Privacy & Security > Automation)",
+                host_app()
             ),
         }
     } else {
@@ -217,7 +218,7 @@ pub(crate) fn ensure_permitted(bundle_id: &str, app_name: &str) -> Result<(), Sc
         REFUSE_UNGRANTED_AUTOMATION.load(Ordering::Acquire),
         bundle_id,
         app_name,
-        &host_app_name(),
+        host_app_name,
         move || {
             determine_permission(&target, true);
         },
@@ -229,15 +230,16 @@ fn check_permission(
     refuse_ungranted: bool,
     bundle_id: &str,
     app_name: &str,
-    host_app: &str,
+    host_app: impl FnOnce() -> String,
     ask: impl FnOnce() + Send + 'static,
 ) -> Result<(), ScriptRefusal> {
     match permission {
         AutomationPermission::Denied => Err(ScriptRefusal {
             code: "automation_denied",
             reason: format!(
-                "macOS does not allow {host_app} to control {app_name}. The user can allow it in \
-                 System Settings > Privacy & Security > Automation"
+                "macOS does not allow {} to control {app_name}. The user can allow it in \
+                 System Settings > Privacy & Security > Automation",
+                host_app()
             ),
         }),
         AutomationPermission::NotRunning => Err(ScriptRefusal {
@@ -635,7 +637,7 @@ mod tests {
                     refuse,
                     "com.apple.TextEdit",
                     "TextEdit",
-                    "Shuttle",
+                    || "Shuttle".into(),
                     || {},
                 );
                 assert_eq!(result.as_ref().err().map(|r| r.code), expected);
@@ -674,7 +676,7 @@ mod tests {
                 false,
                 BUNDLE,
                 "TextEdit",
-                "Shuttle",
+                || "Shuttle".into(),
                 ask,
             )
         };
@@ -759,7 +761,7 @@ mod tests {
     fn script_errors_name_a_denied_permission() {
         let denied = script_error_refusal(
             "0:120: execution error: Not authorized to send Apple events to Finder. (-1743)",
-            "Shuttle",
+            || "Shuttle".into(),
         );
         assert_eq!(denied.code, "automation_denied");
         assert!(
@@ -769,7 +771,7 @@ mod tests {
         );
         let other = script_error_refusal(
             "0:98: execution error: Finder got an error: The name \"b.txt\" is already taken. (-48)",
-            "Shuttle",
+            || "Shuttle".into(),
         );
         assert_eq!(other.code, "automation_failed");
         assert!(other.reason.starts_with("Finder got an error"));
