@@ -572,15 +572,16 @@ fn finder_rename_result(
             } else {
                 FILE_NAME_NEEDS_RENAME
             };
-            let (outcome, effect) = if refusal.code == "automation_timeout" {
-                (
-                    "The rename may have reached Finder: read the item's name in a fresh \
+            let (outcome, effect) =
+                if matches!(refusal.code, "automation_timeout" | "rename_unconfirmed") {
+                    (
+                        "The rename may have reached Finder: read the item's name in a fresh \
                      get_window_state before renaming again.",
-                    "indeterminate",
-                )
-            } else {
-                ("The file keeps its name; nothing else was sent.", "refused")
-            };
+                        "indeterminate",
+                    )
+                } else {
+                    ("The file keeps its name; nothing else was sent.", "refused")
+                };
             ToolResult::error(format!(
                 "set_value refused ({code}): renaming \"{old_name}\" through \
              Finder did not complete ({}: {}). {outcome}",
@@ -1702,29 +1703,34 @@ mod tests {
             data["reason"],
             "Grant Finder access in System Settings > Privacy & Security > Automation"
         );
-        let timed_out = super::finder_rename_result(
-            7,
-            42,
-            path,
-            "b.txt",
-            Ok(Err(crate::apple_events::ScriptRefusal {
-                code: "automation_timeout",
-                reason: "the app did not answer within 30 s".into(),
-            })),
-        );
-        let timed_out_text = text(&timed_out);
-        assert!(
-            timed_out_text.contains("may have reached Finder"),
-            "{timed_out_text}"
-        );
-        assert!(
-            !timed_out_text.contains("keeps its name"),
-            "{timed_out_text}"
-        );
-        assert_eq!(
-            timed_out.structured_content.unwrap()["effect"],
-            "indeterminate"
-        );
+        for (code, reason) in [
+            ("automation_timeout", "the app did not answer within 30 s"),
+            (
+                "rename_unconfirmed",
+                "Finder accepted the rename, but /tmp does not list \"b.txt\"",
+            ),
+        ] {
+            let unsure = super::finder_rename_result(
+                7,
+                42,
+                path,
+                "b.txt",
+                Ok(Err(crate::apple_events::ScriptRefusal {
+                    code,
+                    reason: reason.into(),
+                })),
+            );
+            let unsure_text = text(&unsure);
+            assert!(
+                unsure_text.contains("may have reached Finder"),
+                "{unsure_text}"
+            );
+            assert!(!unsure_text.contains("keeps its name"), "{unsure_text}");
+            assert_eq!(
+                unsure.structured_content.unwrap()["effect"],
+                "indeterminate"
+            );
+        }
     }
 
     #[test]
