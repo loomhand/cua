@@ -26,6 +26,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use crate::permissions::panel::host_app_name;
+
 pub(crate) static REFUSE_UNGRANTED_AUTOMATION: AtomicBool = AtomicBool::new(false);
 static CONSENT_ASKS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
@@ -182,17 +184,18 @@ pub fn run_script(script: &str, args: &[&str], timeout: Duration) -> Result<Stri
         return Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned());
     }
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    Err(script_error_refusal(&stderr))
+    Err(script_error_refusal(&stderr, &host_app_name()))
 }
 
 /// Map an osascript error line ("... (-1743)") to a refusal.
-fn script_error_refusal(stderr: &str) -> ScriptRefusal {
+fn script_error_refusal(stderr: &str, host_app: &str) -> ScriptRefusal {
     if stderr.contains("(-1743)") {
         ScriptRefusal {
             code: "automation_denied",
-            reason: "macOS does not allow Cua Driver to control this app (System Settings > \
-                     Privacy & Security > Automation)"
-                .into(),
+            reason: format!(
+                "macOS does not allow {host_app} to control this app (System Settings > \
+                 Privacy & Security > Automation)"
+            ),
         }
     } else {
         // osascript prints "<offset>: execution error: <message> (<code>)".
@@ -214,6 +217,7 @@ pub(crate) fn ensure_permitted(bundle_id: &str, app_name: &str) -> Result<(), Sc
         REFUSE_UNGRANTED_AUTOMATION.load(Ordering::Acquire),
         bundle_id,
         app_name,
+        &host_app_name(),
         move || {
             determine_permission(&target, true);
         },
@@ -225,13 +229,14 @@ fn check_permission(
     refuse_ungranted: bool,
     bundle_id: &str,
     app_name: &str,
+    host_app: &str,
     ask: impl FnOnce() + Send + 'static,
 ) -> Result<(), ScriptRefusal> {
     match permission {
         AutomationPermission::Denied => Err(ScriptRefusal {
             code: "automation_denied",
             reason: format!(
-                "macOS does not allow Cua Driver to control {app_name}. The user can allow it in \
+                "macOS does not allow {host_app} to control {app_name}. The user can allow it in \
                  System Settings > Privacy & Security > Automation"
             ),
         }),
@@ -625,9 +630,22 @@ mod tests {
                     refuse.then_some("automation_consent_required"),
                 ),
             ] {
-                let result =
-                    check_permission(permission, refuse, "com.apple.TextEdit", "TextEdit", || {});
+                let result = check_permission(
+                    permission,
+                    refuse,
+                    "com.apple.TextEdit",
+                    "TextEdit",
+                    "Shuttle",
+                    || {},
+                );
                 assert_eq!(result.as_ref().err().map(|r| r.code), expected);
+                if expected == Some("automation_denied") {
+                    let reason = &result.as_ref().unwrap_err().reason;
+                    assert!(
+                        reason.contains("allow Shuttle to control TextEdit"),
+                        "{reason}"
+                    );
+                }
                 if expected == Some("automation_consent_required") {
                     let reason = result.unwrap_err().reason;
                     for text in [
@@ -656,6 +674,7 @@ mod tests {
                 false,
                 BUNDLE,
                 "TextEdit",
+                "Shuttle",
                 ask,
             )
         };
@@ -740,10 +759,17 @@ mod tests {
     fn script_errors_name_a_denied_permission() {
         let denied = script_error_refusal(
             "0:120: execution error: Not authorized to send Apple events to Finder. (-1743)",
+            "Shuttle",
         );
         assert_eq!(denied.code, "automation_denied");
+        assert!(
+            denied.reason.contains("allow Shuttle to control"),
+            "{}",
+            denied.reason
+        );
         let other = script_error_refusal(
             "0:98: execution error: Finder got an error: The name \"b.txt\" is already taken. (-48)",
+            "Shuttle",
         );
         assert_eq!(other.code, "automation_failed");
         assert!(other.reason.starts_with("Finder got an error"));
