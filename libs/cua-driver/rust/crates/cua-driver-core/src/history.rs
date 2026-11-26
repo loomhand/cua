@@ -56,6 +56,8 @@ const CHUNK_KEY_INFO: &[u8] = b"cua-driver/history-profile/v1/chunk-key";
 const SESSION_ID_KEY_INFO: &[u8] = b"cua-driver/history-profile/v1/session-id-key";
 const CHUNK_ROTATION_INTERVAL: Duration = Duration::from_secs(55 * 60);
 const WRITER_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(30);
+const LEASE_RETRY_WINDOW: Duration = Duration::from_millis(200);
+const LEASE_RETRY_INTERVAL: Duration = Duration::from_millis(5);
 const ROOT_MARKER_NAME: &str = ".cua-history-root-v1";
 const ROOT_MARKER_CONTENT: &[u8] = b"cua-history-root-v1\n";
 
@@ -1594,8 +1596,13 @@ impl WriterLease {
     fn acquire(root: &Path) -> Result<Self, HistoryError> {
         prepare_history_root(root)?;
         let file = secure_open_lock_file(&root.join("writer.lock"))?;
-        fs2::FileExt::try_lock_exclusive(&file)
-            .map_err(|_| HistoryError::new(HistoryHealthCategory::WriterStopped))?;
+        let deadline = Instant::now() + LEASE_RETRY_WINDOW;
+        while fs2::FileExt::try_lock_exclusive(&file).is_err() {
+            if Instant::now() >= deadline {
+                return Err(HistoryError::new(HistoryHealthCategory::WriterStopped));
+            }
+            thread::sleep(LEASE_RETRY_INTERVAL);
+        }
         Ok(Self { _file: file })
     }
 }
@@ -3157,6 +3164,20 @@ mod tests {
         second.enable().unwrap();
         second.disable().unwrap();
         assert_eq!(history_chunk_paths(temp.path()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_lease_held_briefly_by_another_descriptor_is_acquired_once_released() {
+        let temp = tempfile::tempdir().unwrap();
+        prepare_history_root(temp.path()).unwrap();
+        let holder = secure_open_lock_file(&temp.path().join("writer.lock")).unwrap();
+        fs2::FileExt::try_lock_exclusive(&holder).unwrap();
+        let release = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            drop(holder);
+        });
+        assert!(WriterLease::acquire(temp.path()).is_ok());
+        release.join().unwrap();
     }
 
     #[test]
