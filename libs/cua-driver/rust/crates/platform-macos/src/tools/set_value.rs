@@ -572,14 +572,23 @@ fn finder_rename_result(
             } else {
                 FILE_NAME_NEEDS_RENAME
             };
+            let (outcome, effect) = if refusal.code == "automation_timeout" {
+                (
+                    "The rename may have reached Finder: read the item's name in a fresh \
+                     get_window_state before renaming again.",
+                    "indeterminate",
+                )
+            } else {
+                ("The file keeps its name; nothing else was sent.", "refused")
+            };
             ToolResult::error(format!(
                 "set_value refused ({code}): renaming \"{old_name}\" through \
-             Finder did not complete ({}: {}). The file keeps its name; nothing else was sent.",
+             Finder did not complete ({}: {}). {outcome}",
                 refusal.code, refusal.reason
             ))
             .with_structured(serde_json::json!({
                 "code": code,
-                "effect": "refused",
+                "effect": effect,
                 "path": "apple_events",
                 "pid": pid,
                 "window_id": window_id,
@@ -1650,6 +1659,10 @@ mod tests {
     fn a_finder_rename_publishes_a_confirmed_system_api_record() {
         let record = super::rename_record();
         assert!(record.validate().is_ok());
+        let text = |result: &cua_driver_core::protocol::ToolResult| match &result.content[0] {
+            cua_driver_core::protocol::Content::Text { text, .. } => text.clone(),
+            _ => String::new(),
+        };
         let path = std::path::Path::new("/tmp/a.txt");
         let ok = super::finder_rename_result(7, 42, path, "b.txt", Ok(Ok("/tmp/b.txt".into())));
         assert_eq!(ok.is_error, None);
@@ -1665,6 +1678,7 @@ mod tests {
             })),
         );
         assert_eq!(refused.is_error, Some(true));
+        assert!(text(&refused).contains("keeps its name"));
         let data = refused.structured_content.unwrap();
         assert_eq!(data["code"], "file_name_needs_rename");
         assert_eq!(data["cause"], "automation_denied");
@@ -1687,6 +1701,29 @@ mod tests {
         assert_eq!(
             data["reason"],
             "Grant Finder access in System Settings > Privacy & Security > Automation"
+        );
+        let timed_out = super::finder_rename_result(
+            7,
+            42,
+            path,
+            "b.txt",
+            Ok(Err(crate::apple_events::ScriptRefusal {
+                code: "automation_timeout",
+                reason: "the app did not answer within 30 s".into(),
+            })),
+        );
+        let timed_out_text = text(&timed_out);
+        assert!(
+            timed_out_text.contains("may have reached Finder"),
+            "{timed_out_text}"
+        );
+        assert!(
+            !timed_out_text.contains("keeps its name"),
+            "{timed_out_text}"
+        );
+        assert_eq!(
+            timed_out.structured_content.unwrap()["effect"],
+            "indeterminate"
         );
     }
 
